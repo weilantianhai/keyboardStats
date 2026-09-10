@@ -164,8 +164,9 @@ static void FlushEvents() {
         if (f) {
             for (const auto& line : g_evBuf) fwrite(line.data(), 1, line.size(), f);
             fclose(f);
+            g_evBuf.clear();
         }
-        g_evBuf.clear();
+        // fopen 失败（文件被占用等）时**保留缓冲**，下个周期重试，避免静默丢数据
         return;
     }
 
@@ -372,10 +373,12 @@ void StorageFlushNow() { FlushEvents(); }
 
 // ────────────────────────── 双进程协作 ──────────────────────────
 
-// CreateEvent 幂等：已存在时只是打开（GUI/记录进程谁先起都行）
+// CreateEvent 幂等：已存在时只是打开（GUI/记录进程谁先起都行）。
+// 用**自动复位**事件：SetEvent 唤醒一个等待者后自动清零，即使消费端 ResetEvent
+// 权限不足也不会陷入"永远 signaled → 反复触发"（实测踩过这个坑，见 recorder.cpp）。
 static void EnsureIpc() {
-    if (!g_evReload)   g_evReload   = CreateEventW(nullptr, TRUE, FALSE, kIpcReload);
-    if (!g_evShutdown) g_evShutdown = CreateEventW(nullptr, TRUE, FALSE, kIpcShutdown);
+    if (!g_evReload)   g_evReload   = CreateEventW(nullptr, FALSE, FALSE, kIpcReload);
+    if (!g_evShutdown) g_evShutdown = CreateEventW(nullptr, FALSE, FALSE, kIpcShutdown);
 }
 
 void StorageNotifyPeers() {

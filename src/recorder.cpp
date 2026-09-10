@@ -143,9 +143,12 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == 1) {
                 StorageFlushIfDue();
             } else if (wp == 2) {
+                // 权限必须带 EVENT_MODIFY_STATE：ResetEvent 靠它。只用 SYNCHRONIZE 打开的话
+                // ResetEvent 会静默失败，事件永远保持 signaled，每 300ms 就把记录缓冲清一次
+                // （实测就是这么丢按键的）。
                 HANDLE evs[2] = {
-                    OpenEventW(SYNCHRONIZE, FALSE, kIpcReload),
-                    OpenEventW(SYNCHRONIZE, FALSE, kIpcShutdown),
+                    OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, kIpcReload),
+                    OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, kIpcShutdown),
                 };
                 if (evs[0]) {
                     if (WaitForSingleObject(evs[0], 0) == WAIT_OBJECT_0) {
