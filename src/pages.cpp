@@ -358,10 +358,8 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
     const float barsH = std::max(20.0f, axisY - barsTop);
     const float innerW = w - pad * 2.0f;
     const int n = (int)g_keyHist.size();
-    float barW = innerW / (float)n;
-    barW = std::clamp(barW, 2.0f, 20.0f);           // 键多时压缩铺满，不溢出面板
-    const float groupW = barW * (float)n;
-    const float startX = x + pad + std::max(0.0f, (innerW - groupW) * 0.5f);
+    const float barW = innerW / (float)n;           // 不设上限：条形始终从左铺到右
+    const float startX = x + pad;
     // 标签抽样步长：条宽装不下标签时，每隔 k 根条标一次（k 使标签间距够宽）
     const int nameStride = std::max(1, (int)std::ceil(30.0f / barW));
     const int countStride = std::max(1, (int)std::ceil(24.0f / barW));
