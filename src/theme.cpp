@@ -63,13 +63,14 @@ components::theme::ThemeColorTokens AppTheme() {
     t.border        = g_theme.border;
     t.primary       = g_theme.selected;
     // 整体字号调大：分段控件/柱状图/日期选择器等组件统一放大
-    t.metrics.typography.caption  += 2.0f;
-    t.metrics.typography.label    += 2.0f;
-    t.metrics.typography.body     += 2.0f;
-    t.metrics.typography.title    += 2.0f;
-    t.metrics.typography.display  += 2.0f;
-    t.metrics.typography.subtitle += 2.0f;
-    t.metrics.typography.input    += 2.0f;
+    t.metrics.typography.caption  += 4.0f;
+    t.metrics.typography.label    += 4.0f;
+    t.metrics.typography.body     += 4.0f;
+    t.metrics.typography.title    += 4.0f;
+    t.metrics.typography.display  += 4.0f;
+    t.metrics.typography.subtitle += 4.0f;
+    t.metrics.typography.input    += 4.0f;
+    t.metrics.typography.hint     += 4.0f;
     return t;
 }
 

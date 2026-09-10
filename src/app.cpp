@@ -79,9 +79,13 @@ void FetchStats() {
     g_maxKey = 0;
     for (int vk = 0; vk < 256; ++vk) g_maxKey = std::max(g_maxKey, s.counts[vk]);
 
+    // barChart 组件把 values 当作 0~1 比例（内部 clamp 后乘绘图高度），因此必须传
+    // "次数 / 峰值"，否则每根非零柱都被钳到 1.0，显示满高且 tooltip 恒为 100%
+    long bucketMax = 0;
+    for (const Bucket& b : s.buckets) bucketMax = std::max(bucketMax, b.count);
     g_barVals.clear(); g_barLabels.clear();
     for (const Bucket& b : s.buckets) {
-        g_barVals.push_back((float)b.count);
+        g_barVals.push_back(bucketMax > 0 ? (float)b.count / (float)bucketMax : 0.0f);
         g_barLabels.push_back(Utf8(b.label));
     }
 

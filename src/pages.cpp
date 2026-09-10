@@ -38,8 +38,8 @@ void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
     ui.text(id + ".t")
         .x(x).y(y).size(w, h)
         .text(label)
-        .fontSize(15.0f)
-        .lineHeight(16.0f)
+        .fontSize(17.0f)
+        .lineHeight(20.0f)
         .color(accent ? Hex(0xFFFFFF) : g_theme.text)
         .horizontalAlign(core::HorizontalAlign::Center)
         .verticalAlign(core::VerticalAlign::Center)
@@ -69,23 +69,11 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
         ui.text(id + ".t")
             .x(x).y(y).size(w, h)
             .text(Utf8(cap))
-            .fontSize(std::min(20.0f, std::max(9.0f, h * 0.32f)))
-            .lineHeight(std::min(20.0f, std::max(9.0f, h * 0.32f)))
+            .fontSize(std::min(24.0f, std::max(10.0f, h * 0.32f)))
+            .lineHeight(std::min(24.0f, std::max(10.0f, h * 0.32f)))
             .color(count > 0 ? Hex(0xFFFFFF) : g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Center)
             .verticalAlign(core::VerticalAlign::Center)
-            .build();
-    }
-    // 计数：只标注 Space（唯一的 6.25u 超宽键），其余次数看 Top 10
-    if (kKeys[idx].vk == 0x20 && kKeys[idx].w > 4.0f && count > 0) {
-        ui.text(id + ".c")
-            .x(x).y(y + h * 0.52f).size(w, h * 0.4f)
-            .text(WithCommas(count))
-            .fontSize(std::min(18.0f, std::max(12.0f, h * 0.26f)))
-            .lineHeight(std::min(19.0f, std::max(13.0f, h * 0.28f)))
-            .color(Hex(0x1E293B))
-            .horizontalAlign(core::HorizontalAlign::Center)
-            .verticalAlign(core::VerticalAlign::Top)
             .build();
     }
 }
@@ -94,22 +82,22 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
 
 void DrawHeader(core::dsl::Ui& ui, float w) {
     ui.text("hd.title")
-        .x(28.0f).y(14.0f).size(w - 200.0f, 40.0f)
+        .x(28.0f).y(12.0f).size(w - 200.0f, 46.0f)
         .text("KeyboardStats 键盘热力统计")
-        .fontSize(30.0f).lineHeight(36.0f)
+        .fontSize(34.0f).lineHeight(40.0f)
         .color(g_theme.text)
         .build();
     std::string sub = "共 " + WithCommas(g_stats.total) + " 次按键 · " + g_rangeText;
     ui.text("hd.sub")
-        .x(28.0f).y(58.0f).size(w - 200.0f, 24.0f)
+        .x(28.0f).y(62.0f).size(w - 200.0f, 28.0f)
         .text(sub)
-        .fontSize(16.0f).lineHeight(22.0f)
+        .fontSize(19.0f).lineHeight(26.0f)
         .color(g_theme.textMut)
         .build();
-    MiniButton(ui, "hd.top10", w - 232.0f, 22.0f, 100.0f, 30.0f,
+    MiniButton(ui, "hd.top10", w - 232.0f, 22.0f, 100.0f, 34.0f,
                s_top10Open ? "隐藏 Top 10" : "显示 Top 10", false,
                [] { s_top10Open = !s_top10Open; app::requestUpdate(); });
-    MiniButton(ui, "hd.theme", w - 122.0f, 22.0f, 94.0f, 30.0f,
+    MiniButton(ui, "hd.theme", w - 122.0f, 22.0f, 94.0f, 34.0f,
                g_lightMode ? "深色模式" : "浅色模式", false, ToggleTheme);
 }
 
@@ -132,10 +120,10 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 
     ui.stack("ctrl.range")
-        .x(248.0f).y(y).size(380.0f, h)
+        .x(248.0f).y(y).size(420.0f, h)
         .content([&] {
             components::segmented(ui, "seg.range")
-                .size(380.0f, h)
+                .size(420.0f, h)
                 .items({"今天", "最近 7 天", "最近 30 天", "全部"})
                 .selected(g_rangeMode <= 3 ? g_rangeMode : 3)
                 .theme(CurrentTheme())
@@ -153,11 +141,11 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         return Utf8(YmdToStr(ymd));
     };
 
-    MiniButton(ui, "btn.from", 620.0f, y, 96.0f, h, "从 " + ymdStr(g_pendingFrom),
+    MiniButton(ui, "btn.from", 690.0f, y, 100.0f, h, "从 " + ymdStr(g_pendingFrom),
                false, [] { g_fromOpen.set(!g_fromOpen.get()); });
-    MiniButton(ui, "btn.to", 724.0f, y, 96.0f, h, "至 " + ymdStr(g_pendingTo),
+    MiniButton(ui, "btn.to", 798.0f, y, 100.0f, h, "至 " + ymdStr(g_pendingTo),
                false, [] { g_toOpen.set(!g_toOpen.get()); });
-    MiniButton(ui, "btn.apply", 832.0f, y, 72.0f, h, "应用", true, [] {
+    MiniButton(ui, "btn.apply", 906.0f, y, 76.0f, h, "应用", true, [] {
         if (g_pendingFrom && g_pendingTo) {
             g_customFrom = g_pendingFrom;
             g_customTo = g_pendingTo;
@@ -221,8 +209,8 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const float ly = ky + u * 6.0f + 22.0f;
     const float lx = kx + u * 24.0f - 8.0f * 22.0f - 46.0f;
     ui.text("legend.lo")
-        .x(lx - 30.0f).y(ly - 3.0f).size(28.0f, 18.0f)
-        .text("少").fontSize(14.0f).lineHeight(18.0f)
+        .x(lx - 34.0f).y(ly - 4.0f).size(32.0f, 20.0f)
+        .text("少").fontSize(16.0f).lineHeight(20.0f)
         .color(g_theme.textMut).horizontalAlign(core::HorizontalAlign::Right)
         .build();
     for (int i = 0; i < 8; ++i) {
@@ -234,8 +222,8 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
             .build();
     }
     ui.text("legend.hi")
-        .x(lx + 8 * 22.0f + 4.0f).y(ly - 3.0f).size(24.0f, 18.0f)
-        .text("多").fontSize(14.0f).lineHeight(18.0f)
+        .x(lx + 8 * 22.0f + 4.0f).y(ly - 4.0f).size(26.0f, 20.0f)
+        .text("多").fontSize(16.0f).lineHeight(20.0f)
         .color(g_theme.textMut)
         .build();
 }
@@ -256,16 +244,16 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
         .border(1.0f, g_theme.border)
         .build();
     ui.text("top.title")
-        .x(x + 16.0f).y(y + 14.0f).size(w - 96.0f, 24.0f)
+        .x(x + 16.0f).y(y + 14.0f).size(w - 96.0f, 26.0f)
         .text("Top 10")
-        .fontSize(17.0f).lineHeight(22.0f)
+        .fontSize(20.0f).lineHeight(24.0f)
         .color(g_theme.text)
         .build();
-    MiniButton(ui, "top.collapse", x + w - 76.0f, y + 10.0f, 60.0f, 26.0f,
+    MiniButton(ui, "top.collapse", x + w - 76.0f, y + 10.0f, 60.0f, 30.0f,
                "收起", false, [] { s_top10Open = false; app::requestUpdate(); });
 
-    float rowY = y + 46.0f;
-    const float rowH = std::min(30.0f, (h - 60.0f) / 10.0f);
+    float rowY = y + 50.0f;
+    const float rowH = std::min(34.0f, (h - 64.0f) / 10.0f);
     const int n = (int)g_keyHist.size();
     const int start = std::max(0, n - 10);
     int rank = n - start;   // 升序数组的末尾即最大值，倒序输出
@@ -275,13 +263,13 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
         ui.text(id + ".name")
             .x(x + 16.0f).y(rowY).size(w * 0.55f, rowH)
             .text(std::to_string(rank) + ". " + e.name)
-            .fontSize(14.0f).lineHeight(rowH)
+            .fontSize(17.0f).lineHeight(rowH)
             .color(g_theme.text)
             .build();
         ui.text(id + ".count")
             .x(x + w * 0.55f).y(rowY).size(w - w * 0.55f - 16.0f, rowH)
             .text(WithCommas(e.count))
-            .fontSize(14.0f).lineHeight(rowH)
+            .fontSize(17.0f).lineHeight(rowH)
             .color(g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Right)
             .build();
@@ -312,103 +300,126 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
     }
 }
 
-// 按键使用次数直方图：升序（左低右高），色条沿用热力渐变；
-// 条上标注次数、条下标注键名（空间不足的自动跳过），面板右上角固定显示最多键。
-// 宽度自适应：窄面板标题分两行、条形压缩铺满、标签按步长抽样。
+// 按键使用次数直方图：升序（左低右高），几何/字号/交互与上方 barChart 保持一致
+// （同一 plotX/plotY/plotW/plotH、4 条网格线、同圆角比例、hover 态 + 悬浮详情）。
+// 键名仅在槽宽放得下时显示（窄窗口不显示），次数信息靠悬浮提示。
 void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
-    ui.rect("keyhist.panel")
-        .x(x).y(y).size(w, h)
-        .color(g_theme.panel)
-        .radius(12.0f)
-        .border(1.0f, g_theme.border)
-        .build();
+    const auto tk = CurrentTheme();
+    const auto& m = tk.metrics;
 
-    if (g_keyHist.empty()) {
-        ui.text("keyhist.empty")
-            .x(x + 16.0f).y(y + 40.0f).size(w - 32.0f, 24.0f)
-            .text("暂无数据，去打几个字吧")
-            .fontSize(14.0f).lineHeight(20.0f)
-            .color(g_theme.textMut)
-            .build();
-        return;
-    }
-
-    const bool narrow = w < 900.0f;   // 标题行放不下"最多"注释时换行
-    ui.text("keyhist.title")
-        .x(x + 16.0f).y(y + 10.0f).size(narrow ? w - 32.0f : w * 0.55f, 20.0f)
-        .text("按键使用次数分布（左 → 右 升序）")
-        .fontSize(14.0f).lineHeight(18.0f)
-        .color(g_theme.textMut)
-        .build();
-    // 面板右上角（窄面板时第二行右对齐）：最多键名 + 次数
-    const TopEntry& maxE = g_keyHist.back();
-    ui.text("keyhist.max")
-        .x(narrow ? x + 16.0f : x + w * 0.5f)
-        .y(narrow ? y + 28.0f : y + 10.0f)
-        .size(narrow ? w - 32.0f : w * 0.5f - 16.0f, 20.0f)
-        .text("最多：" + maxE.name + " " + WithCommas(maxE.count) + " 次")
-        .fontSize(14.0f).lineHeight(18.0f)
-        .color(g_theme.text)
-        .horizontalAlign(core::HorizontalAlign::Right)
-        .build();
-
-    const float pad = 14.0f;
-    const float barsTop = y + (narrow ? 52.0f : 38.0f);
-    const float axisY = y + h - 30.0f;              // 条形底轴（下方留键名区）
-    const float barsH = std::max(20.0f, axisY - barsTop);
-    const float innerW = w - pad * 2.0f;
-    const int n = (int)g_keyHist.size();
-    const float barW = innerW / (float)n;           // 不设上限：条形始终从左铺到右
-    const float startX = x + pad;
-    // 标签抽样步长：条宽装不下标签时，每隔 k 根条标一次（k 使标签间距够宽）
-    const int nameStride = std::max(1, (int)std::ceil(30.0f / barW));
-    const int countStride = std::max(1, (int)std::ceil(24.0f / barW));
-
-    for (int i = 0; i < n; ++i) {
-        const TopEntry& e = g_keyHist[(size_t)i];
-        const float frac = std::clamp(e.frac, 0.0f, 1.0f);
-        const float bh = std::max(2.0f, barsH * frac);
-        const float bx = startX + (float)i * barW;
-        const float bw = std::max(1.5f, barW - 2.0f);
-        const std::string id = "keyhist.bar." + std::to_string(i);
-        ui.rect(id)
-            .x(bx).y(axisY - bh)
-            .size(bw, bh)
-            .color(HeatColor(frac))   // 与键帽热力同一语义：蓝 → 黄 → 红
-            .radius(2.0f)
-            .transition(Motion())
-            .animate(core::AnimProperty::Frame)
-            .build();
-        // 次数：条形足够高且水平放得下时标在条顶上方，否则按步长抽样
-        bool cLabel = bh >= 16.0f && barW >= 12.0f;
-        if (!cLabel && bh >= 16.0f && i % countStride == 0) {
-            cLabel = (float)countStride * barW >= 20.0f;
-        }
-        if (cLabel) {
-            ui.text(id + ".c")
-                .x(bx - 6.0f).y(axisY - bh - 14.0f).size(bw + 12.0f, 12.0f)
-                .text(WithCommas(e.count))
-                .fontSize(9.0f).lineHeight(11.0f)
-                .color(g_theme.textMut)
-                .horizontalAlign(core::HorizontalAlign::Center)
+    ui.stack("keyhist.page")
+        .x(x).y(y)
+        .size(w, h)
+        .content([&] {
+            ui.rect("keyhist.bg")
+                .size(w, h)
+                .color(tk.surface)
+                .radius(m.radius.section)
+                .border(1.0f, components::theme::withOpacity(g_theme.border, 0.76f))
+                .shadow(components::theme::shadow(tk, 18.0f, 4.0f, 0.20f, 0.10f))
                 .build();
-        }
-        // 键名：条宽装得下才标；装不下时按步长抽样标注（估宽 ≈ 字符数 × 9px × 0.62）
-        const float estW = (float)e.name.size() * 9.0f * 0.62f;
-        bool nLabel = barW >= estW + 2.0f;
-        if (!nLabel && i % nameStride == 0) {
-            nLabel = (float)nameStride * barW >= estW + 2.0f;
-        }
-        if (nLabel) {
-            ui.text(id + ".n")
-                .x(bx - 8.0f).y(axisY + 4.0f).size(bw + 16.0f, 12.0f)
-                .text(e.name)
-                .fontSize(9.0f).lineHeight(11.0f)
-                .color(g_theme.textMut)
-                .horizontalAlign(core::HorizontalAlign::Center)
+
+            const float titleX = m.spacing.large;
+            ui.text("keyhist.title")
+                .x(titleX).y(m.typography.control)
+                .size(std::max(0.0f, w * 0.55f), m.control.compact)
+                .text("按键使用次数分布（左 → 右 升序）")
+                .fontSize(m.typography.title)
+                .lineHeight(m.typography.title + m.typography.lineGap)
+                .color(g_theme.text)
                 .build();
-        }
-    }
+
+            if (g_keyHist.empty()) {
+                ui.text("keyhist.empty")
+                    .x(titleX).y(m.typography.control + m.typography.title + 12.0f)
+                    .size(w - titleX * 2.0f, m.typography.body + 8.0f)
+                    .text("暂无数据，去打几个字吧")
+                    .fontSize(m.typography.body)
+                    .lineHeight(m.typography.body + m.typography.lineGap)
+                    .color(g_theme.textMut)
+                    .build();
+                return;
+            }
+
+            // 右上角注解：最多键（键名标签被隐藏时也能看到极值）
+            const TopEntry& maxE = g_keyHist.back();
+            ui.text("keyhist.max")
+                .x(w * 0.5f)
+                .y(m.typography.control + (m.typography.title - m.typography.label) * 0.5f)
+                .size(std::max(0.0f, w * 0.5f - titleX), m.control.compact)
+                .text("最多：" + maxE.name + " " + WithCommas(maxE.count) + " 次")
+                .fontSize(m.typography.label)
+                .lineHeight(m.typography.label + m.typography.lineGap)
+                .color(g_theme.textMut)
+                .horizontalAlign(core::HorizontalAlign::Right)
+                .build();
+
+            // 绘图区几何与 barChart 相同
+            const float plotX = 32.0f;
+            const float plotY = 70.0f;
+            const float plotW = std::max(1.0f, w - 64.0f);
+            const float plotH = std::max(1.0f, h - 112.0f);
+            const float bottomY = plotY + plotH;
+            const core::Color grid = components::theme::withOpacity(g_theme.border,
+                                                                   tk.dark ? 0.38f : 0.36f);
+            for (int line = 0; line < 4; ++line) {
+                ui.rect("keyhist.grid." + std::to_string(line))
+                    .x(plotX).y(plotY + (float)line * plotH / 3.0f)
+                    .size(plotW, m.spacing.hairline)
+                    .color(grid)
+                    .build();
+            }
+
+            const int n = (int)g_keyHist.size();
+            const float slotW = plotW / (float)n;
+            // barChart 用 min(32, max(18, slot*0.54))；键数可达上百，下限放宽到 2px 防溢出
+            const float barW = std::min(32.0f, std::max(2.0f, slotW * 0.54f));
+            const float labelFont = m.typography.label;
+            for (int i = 0; i < n; ++i) {
+                const TopEntry& e = g_keyHist[(size_t)i];
+                const float frac = std::clamp(e.frac, 0.0f, 1.0f);
+                const float barH = std::max(8.0f, frac * plotH);
+                const float bx = plotX + (float)i * slotW + (slotW - barW) * 0.5f;
+                const float by = bottomY - barH;
+                const std::string barId = "keyhist.bar." + std::to_string(i);
+                const core::Color color = HeatColor(frac);   // 热力渐变：蓝 → 黄 → 红
+                ui.rect(barId)
+                    .x(bx).y(by).size(barW, barH)
+                    .states(color,
+                            core::mixColor(color, core::Color{1, 1, 1, 1}, 0.18f),
+                            core::mixColor(color, core::Color{0, 0, 0, 1}, 0.12f))
+                    .radius(std::min(m.radius.popup, barW * 0.34f))
+                    .instantStates()
+                    .transition(Motion())
+                    .animate(core::AnimProperty::Frame | core::AnimProperty::Color)
+                    .build();
+
+                // 键名：槽宽放得下才显示（窄窗口整体不显示）
+                const float estW = (float)e.name.size() * labelFont * 0.62f;
+                if (slotW >= estW + 4.0f) {
+                    ui.text(barId + ".label")
+                        .x(bx - m.spacing.compact).y(h - m.control.menuItem)
+                        .size(barW + m.spacing.section, m.control.indicator)
+                        .text(e.name)
+                        .fontSize(labelFont)
+                        .lineHeight(labelFont + m.typography.lineGap)
+                        .color(components::theme::withOpacity(g_theme.text, 0.56f))
+                        .horizontalAlign(core::HorizontalAlign::Center)
+                        .build();
+                }
+
+                // 悬浮详情：如 "z 1254 次"
+                components::tooltip(ui, barId + ".tooltip")
+                    .theme(tk)
+                    .source(barId)
+                    .value(e.name + " " + WithCommas(e.count) + " 次")
+                    .anchor(bx + barW * 0.5f, by)
+                    .bounds(w, h)
+                    .style(components::TooltipStyle(tk))
+                    .build();
+            }
+        })
+        .build();
 }
 
 void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen) {
