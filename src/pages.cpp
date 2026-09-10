@@ -82,14 +82,51 @@ void SaveLayoutPref(const char* key, float value) {
     PrefSetValue(L"ui-layout.txt", key, buf);
 }
 
-// 鼠标面板：左右键/中键/侧键/滚轮（含上滑 ^ 下滑 v 键）按次数着色
+// 内盒右下角外侧的尺寸指示器：按住左键拖动无极调节（松手存档）
+void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
+                  float* value, float minValue, float maxValue, const char* prefKey) {
+    const float s = Px(15.0f);
+    ui.rect(id)
+        .x(x).y(y).size(s, s)
+        .color(g_theme.panelHi)
+        .radius(Px(4.0f))
+        .border(1.0f, g_theme.border)
+        .states(g_theme.panelHi, g_theme.panelActive, g_theme.selected)
+        .transition(Motion())
+        .animate(core::AnimProperty::Color)
+        .onDrag([value, minValue, maxValue](auto& e) {
+            const float delta = (float)(e.deltaX + e.deltaY);
+            if (delta == 0.0f) return;
+            *value = std::clamp(*value * (1.0f + delta / 260.0f), minValue, maxValue);
+            app::requestUpdate();
+        })
+        .onRelease([value, prefKey](auto&, auto&) { SaveLayoutPref(prefKey, *value); })
+        .build();
+    for (int i = 0; i < 3; ++i) {   // 抓握纹
+        ui.rect(id + ".g" + std::to_string(i))
+            .x(x + s * 0.26f + (float)i * s * 0.19f).y(y + s * 0.3f)
+            .size(Px(1.5f), s * 0.4f)
+            .color(g_theme.textMut)
+            .radius(Px(1.0f))
+            .build();
+    }
+}
+
+// 鼠标盒子：面板 + 机身，左右键/中键/侧键/滚轮（含上滑 ^ 下滑 v 键）按次数着色
 void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
     const auto tk = CurrentTheme();
     ui.stack("mouse.page")
         .x(x).y(y)
         .size(w, h)
         .content([&] {
-            const float pad = Px(7.0f);
+            // 鼠标盒子底
+            ui.rect("mouse.box")
+                .size(w, h)
+                .color(g_theme.panelHi)
+                .radius(Px(10.0f))
+                .border(1.0f, g_theme.border)
+                .build();
+            const float pad = Px(13.0f);
             const float bodyW = w - pad * 2.0f;
             const float bodyH = h - pad * 2.0f;
             ui.rect("mouse.body")
@@ -409,6 +446,15 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
 
     auto drawContent = [&](core::dsl::Ui& c) {
         const float gap = 2.0f;
+        const float kbp = Px(10.0f);   // 键盘盒子内边距
+        // 键盘盒子（大盒子内的子盒）
+        c.rect("heat.kbbox")
+            .x(kbX - kbp).y(-kbp)
+            .size(kbW + kbp * 2.0f, kbH + kbp * 2.0f)
+            .color(g_theme.panelHi)
+            .radius(Px(10.0f))
+            .border(1.0f, g_theme.border)
+            .build();
         const int n = (int)(sizeof(kKeys) / sizeof(kKeys[0]));
         for (int i = 0; i < n; ++i) {
             const KeyDef& k = kKeys[i];
@@ -418,7 +464,18 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
             DrawKeycap(c, i, kbX + k.x * u + gap, k.y * u + gap,
                        k.w * u - gap * 2.0f, k.h * u - gap * 2.0f, cnt, t);
         }
+        // 键盘盒子尺寸指示器（右下角外侧；钳制在内容范围内，避免被裁剪）
+        const float hs = Px(17.0f);
+        ResizeHandle(c, "kb.handle",
+                     std::min(kbX + kbW + kbp + Px(5.0f), innerW - hs),
+                     std::min(kbH + kbp + Px(5.0f), drawH - hs),
+                     &s_kbScale, 0.6f, 1.6f, "kb");
+        // 鼠标盒子（大盒子内的子盒）
         DrawMousePanel(c, mouseX, mouseY, mouseW, mouseH);
+        ResizeHandle(c, "mouse.handle",
+                     std::min(mouseX + mouseW + Px(5.0f), innerW - hs),
+                     std::min(mouseY + mouseH + Px(5.0f), drawH - hs),
+                     &s_mouseScale, 0.6f, 1.8f, "mouse");
     };
 
     if (needScroll) {
