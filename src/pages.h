@@ -6,6 +6,8 @@ namespace app {
 
 void DrawHeader(core::dsl::Ui& ui, float w);
 void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen);
+// 主页看板：活跃分数 / 今日键盘 / 今日鼠标 / 滚轮格数 / 使用天数 / 活跃天数
+void DrawBoard(core::dsl::Ui& ui, const eui::Screen& screen);
 void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen);
 void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen);
 void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen);
@@ -16,5 +18,7 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h);
 void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen);
 // 关窗确认弹窗（跨页面显示在最上层）
 void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen);
+// 首次启动的自启动引导弹窗（显示在最上层，盖过其它弹窗）
+void DrawOnboardDialog(core::dsl::Ui& ui, const eui::Screen& screen);
 
 } // namespace app

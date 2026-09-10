@@ -4,12 +4,14 @@
 
 int main() {
     bool before = AutostartEnabled();
-    AutostartSet(true);
+    bool setOn = AutostartSet(true);
     bool afterOn = AutostartEnabled();
-    AutostartSet(false);
+    bool setOff = AutostartSet(false);
     bool afterOff = AutostartEnabled();
-    printf("before=%d afterOn=%d afterOff=%d  => %s\n",
-           before, afterOn, afterOff,
-           (afterOn && !afterOff) ? "PASS" : "FAIL");
+    printf("before=%d setOn=%d afterOn=%d setOff=%d afterOff=%d  => %s\n",
+           before, setOn, afterOn, setOff, afterOff,
+           (setOn && afterOn && setOff && !afterOff) ? "PASS" : "FAIL");
+    // 恢复测试前的状态，不打扰用户已有的自启动设置
+    if (before) AutostartSet(true);
     return 0;
 }

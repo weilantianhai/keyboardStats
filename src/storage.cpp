@@ -519,6 +519,25 @@ RangeStats QueryRange(int mode, uint32_t from, uint32_t to) {
 
 // ────────────────────────── 记录管理 ──────────────────────────
 
+// 今日键鼠拆分：滚轮伪键码 0xE0..0xE3，点击伪键码 0x01..0x06，其余归键盘
+TodayBreakdown StorageTodayBreakdown() {
+    RangeStats rs = QueryRange(0, 0, 0);
+    TodayBreakdown out;
+    for (int vk = 0; vk < 256; ++vk) {
+        if (rs.counts[vk] == 0) continue;
+        if (vk >= kWheelUp && vk <= kWheelRight)      out.wheel += rs.counts[vk];
+        else if (IsMouseKey((uint8_t)vk))             out.mouseClicks += rs.counts[vk];
+        else                                          out.keyboard += rs.counts[vk];
+    }
+    return out;
+}
+
+long StorageActiveDayCount() {
+    long n = 0;
+    for (auto& [day, d] : g_days) if (d.total > 0) ++n;
+    return n;
+}
+
 static bool IsEventFile(const wchar_t* name) {
     return wcsncmp(name, L"events-", 7) == 0 && wcslen(name) > 11;
 }

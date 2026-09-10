@@ -27,6 +27,7 @@ namespace app {
 int  g_page = 0;
 int  g_debugPick = 0;
 int  g_rangeMode = 3;
+bool g_onboardOpen = false;
 uint32_t g_customFrom = 0, g_customTo = 0;
 uint32_t g_pendingFrom = 0, g_pendingTo = 0;
 
@@ -326,6 +327,10 @@ static void EnsureUiServices() {
 
     FetchStats();
 
+    // 首次启动：弹出自启动引导（用户选择过一次就不再出现）
+    if (PrefGetValue(L"ui-general.txt", "onboarded", "0") != "1")
+        g_onboardOpen = true;
+
     if (g_startHidden) {
         // 自启动静默启动：框架无"初始隐藏"，退化为启动即最小化
         HWND main = GetActiveWindow();
@@ -428,6 +433,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             DrawHeader(ui, screen.width);
             DrawControls(ui, screen);
             if (g_page == 0) {
+                DrawBoard(ui, screen);
                 DrawHeatPage(ui, screen);
                 DrawKeyList(ui, screen);
             } else if (g_page == 1) {
@@ -437,7 +443,8 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             } else {
                 DrawThemePage(ui, screen);
             }
-            DrawCloseDialog(ui, screen);   // 关窗确认：盖在所有页面之上
+            DrawCloseDialog(ui, screen);     // 关窗确认：盖在所有页面之上
+            DrawOnboardDialog(ui, screen);   // 首启引导：盖在一切之上
         })
         .build();
 }

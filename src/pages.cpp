@@ -7,6 +7,8 @@
 #include "layout.h"
 #include "components/components.h"
 #include "timeutil.h"
+#include "storage.h"
+#include "pref.h"
 #include "win/filedialog.h"
 #include "win/autostart.h"
 
@@ -380,6 +382,7 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
 
 // 外盒 / 列表几何（DrawHeatPage 与 DrawKeyList 共用，避免边界公式分叉）
 struct HeatGeometry {
+    float boardY = 0.0f, boardH = 0.0f;   // 主页看板（键鼠区上方横条）
     float boxX = 0.0f, boxY = 0.0f, boxW = 0.0f, boxH = 0.0f;
     float listX = 0.0f, listY = 0.0f, listW = 0.0f, listH = 0.0f;
     float contentX = 0.0f, contentW = 0.0f, gapX = 0.0f;
@@ -398,8 +401,10 @@ HeatGeometry HeatGeom(const eui::Screen& screen) {
                                        std::max(Px(380.0f), g.contentW - listMinW - g.gapX))
                            : g.contentW;
     boxW = std::max(boxW, Px(240.0f));
+    g.boardY = ContentTop() + Px(4.0f);
+    g.boardH = Px(64.0f);
     g.boxX = g.contentX;
-    g.boxY = ContentTop() + Px(12.0f);
+    g.boxY = g.boardY + g.boardH + Px(10.0f);
     g.boxW = boxW;
     g.boxH = std::max(Px(160.0f), screen.height - g.boxY - Px(72.0f));
     g.listX = g.contentX + boxW + g.gapX;
@@ -407,6 +412,68 @@ HeatGeometry HeatGeom(const eui::Screen& screen) {
     g.listW = g.hasList ? std::max(Px(140.0f), g.contentX + g.contentW - g.listX) : 0.0f;
     g.listH = g.boxH;
     return g;
+}
+
+// ────────────────────────── 主页看板（键鼠区上方横条） ──────────────────────────
+
+void DrawBoard(core::dsl::Ui& ui, const eui::Screen& screen) {
+    const auto tk = CurrentTheme();
+    const auto& m = tk.metrics;
+    const HeatGeometry geo = HeatGeom(screen);
+    const float x = geo.contentX, y = geo.boardY, w = geo.contentW, h = geo.boardH;
+
+    ui.rect("board.bg")
+        .x(x).y(y).size(w, h)
+        .color(tk.surface)
+        .radius(Px(12.0f))
+        .border(1.0f, g_theme.border)
+        .shadow(components::theme::shadow(tk, 12.0f, 3.0f, 0.14f, 0.08f))
+        .build();
+
+    const TodayBreakdown td = StorageTodayBreakdown();
+    const StorageInfo info = StorageDescribe();
+    const long activeDays = StorageActiveDayCount();
+    const long usedDays = info.firstYmd ? DayDiff(TodayLocal(), info.firstYmd) + 1 : 0;
+    const long score = td.keyboard + td.mouseClicks + (long)(td.wheel * 0.1);
+
+    struct Card { const char* label; std::string value; };
+    const Card cards[6] = {
+        {"活跃分数",  std::to_string(score)},
+        {"今日键盘",  std::to_string(td.keyboard)},
+        {"今日鼠标",  std::to_string(td.mouseClicks)},
+        {"滚轮格数",  std::to_string(td.wheel)},
+        {"使用天数",  std::to_string(usedDays)},
+        {"活跃天数",  std::to_string(activeDays)},
+    };
+
+    const int n = 6;
+    const float pad = Px(14.0f);
+    const float gapC = Px(10.0f);
+    const float cw = (w - pad * 2.0f - gapC * (n - 1)) / n;
+    for (int i = 0; i < n; ++i) {
+        const float cx = x + pad + (cw + gapC) * i;
+        ui.rect("board.c" + std::to_string(i))
+            .x(cx).y(y + Px(9.0f)).size(cw, h - Px(18.0f))
+            .color(g_theme.panel)
+            .radius(Px(8.0f))
+            .border(1.0f, i == 0 ? components::theme::withOpacity(g_theme.selected, 0.55f)
+                                 : g_theme.border)
+            .build();
+        ui.text("board.l" + std::to_string(i))
+            .x(cx + Px(10.0f)).y(y + Px(14.0f)).size(cw - Px(20.0f), Px(18.0f))
+            .text(cards[i].label)
+            .fontSize(m.typography.caption)
+            .lineHeight(Px(18.0f))
+            .color(g_theme.textMut)
+            .build();
+        ui.text("board.v" + std::to_string(i))
+            .x(cx + Px(10.0f)).y(y + Px(32.0f)).size(cw - Px(20.0f), Px(24.0f))
+            .text(cards[i].value)
+            .fontSize(m.typography.title)
+            .lineHeight(Px(24.0f))
+            .color(i == 0 ? g_theme.selected : g_theme.text)
+            .build();
+    }
 }
 
 void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
@@ -1029,8 +1096,9 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
                 .theme(tk)
                 .transition(Motion())
                 .onChange([](bool v) {
-                    AutostartSet(v);
-                    s_recMsg = v ? "已开启开机自启动（只启动记录程序）" : "已关闭开机自启动";
+                    const bool ok = AutostartSet(v);
+                    s_recMsg = ok ? (v ? "已开启开机自启动（只启动记录程序）" : "已关闭开机自启动")
+                                  : "设置失败（注册表写入被拒绝，请检查权限）";
                     s_recMsgAt = GetTickCount64() / 1000.0;
                     app::requestUpdate();
                 })
@@ -2020,6 +2088,68 @@ void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
     MiniButton(ui, "close.exit", dx + dw - Px(158.0f), dy + dh - Px(64.0f),
                Px(132.0f), Px(44.0f), "退出程序", false,
                [] { CloseDialogDecide(true); });
+}
+
+// ────────────────────────── 首次启动：自启动引导弹窗 ──────────────────────────
+
+void DrawOnboardDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
+    if (!g_onboardOpen) return;
+    const auto tk = CurrentTheme();
+    const auto& m = tk.metrics;
+
+    ui.rect("ob.mask")
+        .size(screen.width, screen.height)
+        .color(core::Color{0.0f, 0.0f, 0.0f, 0.50f})
+        .build();   // 引导弹窗不允许点遮罩关闭（必须明确选择），也不做任何点击处理
+
+    const float dw = Px(500.0f), dh = Px(300.0f);
+    const float dx = (screen.width - dw) * 0.5f, dy = (screen.height - dh) * 0.5f;
+    ui.rect("ob.dlg")
+        .x(dx).y(dy).size(dw, dh)
+        .color(tk.surface)
+        .radius(Px(14.0f))
+        .border(1.0f, g_theme.border)
+        .shadow(components::theme::shadow(tk, 28.0f, 8.0f, 0.28f, 0.16f))
+        .build();
+    ui.text("ob.title")
+        .x(dx + Px(26.0f)).y(dy + Px(22.0f)).size(dw - Px(52.0f), Px(32.0f))
+        .text("开启开机自启动？")
+        .fontSize(m.typography.title)
+        .lineHeight(m.typography.title + m.typography.lineGap)
+        .color(g_theme.text)
+        .build();
+    ui.text("ob.text")
+        .x(dx + Px(26.0f)).y(dy + Px(66.0f)).size(dw - Px(52.0f), Px(110.0f))
+        .text("开启后，电脑开机时会自动在后台记录键鼠使用，\n"
+              "无需手动打开程序，安心无忧。\n"
+              "后台记录只占约 18 MB 内存，托盘图标随时可\n"
+              "以打开主窗口查看统计。")
+        .fontSize(m.typography.body)
+        .lineHeight(Px(24.0f))
+        .color(g_theme.textMut)
+        .build();
+    ui.text("ob.hint")
+        .x(dx + Px(26.0f)).y(dy + Px(170.0f)).size(dw - Px(52.0f), Px(22.0f))
+        .text("之后也可以随时在「设置」页里开启或关闭。")
+        .fontSize(m.typography.caption)
+        .lineHeight(Px(22.0f))
+        .color(g_theme.textMut)
+        .build();
+
+    MiniButton(ui, "ob.enable", dx + Px(26.0f), dy + dh - Px(64.0f),
+               Px(196.0f), Px(44.0f), "开启自启动", true, [] {
+                   const bool ok = AutostartSet(true);
+                   PrefSetValue(L"ui-general.txt", "onboarded", "1");
+                   g_onboardOpen = false;
+                   app::requestUpdate();
+                   (void)ok;   // 失败时设置页的开关状态仍准确（Enabled 查注册表）
+               });
+    MiniButton(ui, "ob.skip", dx + dw - Px(150.0f), dy + dh - Px(64.0f),
+               Px(124.0f), Px(44.0f), "暂不", false, [] {
+                   PrefSetValue(L"ui-general.txt", "onboarded", "1");
+                   g_onboardOpen = false;
+                   app::requestUpdate();
+               });
 }
 
 } // namespace app

@@ -44,6 +44,8 @@ constexpr int kCloseExit   = 2;
 extern bool g_closeDialogOpen;   // 弹窗是否显示
 extern bool g_closeDontAsk;      // 弹窗里"不再提示"的勾选状态
 
+extern bool g_onboardOpen;       // 首次启动的自启动引导弹窗
+
 int  CurrentCloseAction();
 void SetCloseAction(int mode);      // 写入偏好
 void CloseDialogDecide(bool exitApp);

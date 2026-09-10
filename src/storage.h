@@ -96,6 +96,17 @@ struct RangeStats {
 // mode: 0=今天 1=最近7天 2=最近30天 3=全部 4=自定义[from,to]
 RangeStats QueryRange(int mode, uint32_t from, uint32_t to);
 
+// 今日键鼠拆分（主页看板用）
+struct TodayBreakdown {
+    long keyboard = 0;     // 键盘按键（不含鼠标/滚轮）
+    long mouseClicks = 0;  // 鼠标点击（左右/中/侧键，不含滚轮）
+    long wheel = 0;        // 滚轮格数
+};
+TodayBreakdown StorageTodayBreakdown();
+
+// 有记录的天数（按日聚合表非空天数）
+long StorageActiveDayCount();
+
 // ────────────────────────── 记录管理 ──────────────────────────
 
 struct StorageInfo {
