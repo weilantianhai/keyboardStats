@@ -1,29 +1,31 @@
 # KeyboardStats 键盘热力统计
 
-后台记录全系统键盘按键次数与按下时间戳，托盘常驻，打开图形页面查看 104 键热力图与按键直方图。纯 Win32 API + C++17，无第三方依赖。
+后台记录全系统键盘按键次数与按下时间戳，托盘常驻，打开图形页面查看 104 键热力图与按键直方图。C++17 + [EUI-NEO](https://github.com/sudoevolve/EUI-NEO) 声明式 UI 框架（GLFW + OpenGL 渲染，Dark Dashboard 主题，设计令牌来自 ui-ux-pro-max 数据密集仪表盘方案）。
 
 ## 构建
 
-需要 MinGW-w64 g++（本机 `D:\Program Files\mingw64`）：
+需要 CMake + MinGW-w64 g++（本机 `D:\Program Files\mingw64`）：
 
 ```powershell
 .\build.ps1
 ```
 
-产出单个静态链接的 `KeyboardStats.exe`（Win64，无运行时 DLL 依赖，可拷到任意目录运行）。
+脚本封装 CMake Configure + Build（MinGW Makefiles，Release），产出 `build\KeyboardStats.exe`（静态链接，无运行时 DLL 依赖），并自动部署 `assets/` 到 exe 目录。
 
 ## 使用
 
 1. 双击 `KeyboardStats.exe` → 托盘出现图标，开始后台记录
-2. **双击托盘图标** 或右键菜单"打开热力图" → 打开主窗口
-3. 主窗口：
-   - **`▼ 时间段`**：展开时间面板（今天 / 最近 7 天 / 最近 30 天 / 全部 / 自定义日期段）
-   - **`热力图 / 直方图`**：页面切换
-     - 热力图页：104 键按频次着色（灰=未用 → 蓝 → 黄 → 红），键帽上显示次数，底部 Top 10 排行
-     - 直方图页：按时段聚合柱状图（今天→每小时，7/30 天→每天，全部→每月）
-4. 右键托盘图标 → **开机自启动**（写/删 `HKCU\...\CurrentVersion\Run`，无需管理员）
-5. 关闭窗口 = 隐藏到托盘；真正退出用托盘右键 → 退出
-6. 重复启动会提示"已在运行"（单实例互斥）
+2. 单击托盘图标或右键菜单 → 打开主窗口；关闭窗口 = 隐藏到托盘
+3. 主窗口（1180x720，可随窗口缩放）：
+   - **`热力图 / 直方图`** 分段切换页面（也可用 ←/→ 方向键或 PgUp/PgDn 切换）
+   - **`今天 / 最近7天 / 最近30天 / 全部`** 分段切换统计时段
+   - **`自定义`**：展开两个日期选择器选择日期段，`应用` 生效
+   - 热力图页：104 键按频次着色（灰=未用 → 蓝 → 黄 → 红），键帽显示次数，右侧 Top 10 排行
+   - 直方图页：按时段聚合柱状图（今天→每小时，7/30 天→每天，全部→每月）
+4. 右键托盘图标 → 退出（真正退出；退出前自动落盘）
+5. 重复启动会提示"已在运行"（单实例互斥）
+
+开机自启动：注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（`AutostartSet`，无需管理员），可用测试程序验证。
 
 ## 数据存储
 
@@ -38,26 +40,36 @@
 
 **隐私**：数据只存在本机。events 日志记录"什么键 + 何时"，理论上可还原打字行为，请勿同步到云端。程序自身不做任何网络通信。
 
-## 验证状态（2026-09-10 实测）
+## 验证状态（2026-09-10，EUI-NEO 重写版实测）
 
 | 项目 | 结果 |
 |---|---|
-| 钩子捕获 → 5 秒落盘 | ✅ 21 次按键 → 21 行事件，键码逐条核对 |
-| 按日/按时聚合、时段查询 | ✅ test_query：全部=24，今天 10 时→24，A/Z/G=2，空格=8 |
-| 热力图渲染 | ✅ 像素级抽样：8 个高热键红色、97 个空键标准灰 |
-| 重启持久化 | ✅ 退出重启后计数保留（24 行完整） |
-| 开机自启动注册表 | ✅ test_autostart：写→读→删 全链路 PASS |
-| 直方图/时间面板 UI 交互 | 待人工确认（自动化点击受限，请打开程序手动切换查看） |
+| 构建链 | ✅ CMake + MinGW，单 exe 3.2 MB + assets |
+| 数据层回归 | ✅ test_query：total=703，37 非零键，空格=39 A=37 Z=9 G=24 |
+| 开机自启动注册表 | ✅ test_autostart：before=0 afterOn=1 afterOff=0 PASS |
+| 钩子捕获 → 5 秒落盘 | ✅ 发送 4 次按键 → 事件文件 24→28 行 |
+| 深色主题渲染 | ✅ 像素级抽样：背景 #0B0C10 / 面板 #141822 占比 58%，无白屏 |
+| 热力图着色 | ✅ 暖色键（蓝→黄→红梯度）+ 空闲键帽灰像素签名 |
+| 页签切换（热力图/直方图） | ✅ 点击触发 page onChange v=1，抓屏确认键帽消失、柱状图出现 |
+| 时段切换 | ✅ 4 次范围 onChange 触发 |
+| 关闭 → 托盘驻留 | ✅ WM_CLOSE 后进程存活、窗口隐藏 |
+| 键盘翻页（←/→/PgUp/PgDn） | ✅ onKeyEvent 处理器已注册 |
 
 ## 代码结构
 
 ```
-src/main.cpp      入口：单实例互斥、DPI 感知、启动参数
-src/hook.cpp      WH_KEYBOARD_LL 低级键盘钩子（只观察不拦截）
-src/storage.cpp   事件缓冲落盘、按日聚合、时段查询引擎
-src/gui.cpp       主窗口、热力图/直方图绘制、时间面板、托盘、自启动
-src/layout.h      104 键 ANSI 布局表 + 键名映射
-src/timeutil.cpp  公历日期算法（Howard Hinnant）、时间格式化
-build.ps1         一键构建
-tests/            数据层与注册表逻辑的独立测试程序
+src/app.cpp            EUI-NEO 声明式 UI：主题令牌、热力图页、直方图页、时段控制、
+                       Top 10 排行、日期选择器、托盘、单实例、统计服务（500ms 定时刷新）
+src/win/autostart.cpp  开机自启动注册表逻辑
+src/hook.cpp           WH_KEYBOARD_LL 低级键盘钩子（只观察不拦截）
+src/storage.cpp        事件缓冲落盘、按日聚合、时段查询引擎
+src/layout.h           104 键 ANSI 布局表 + 键名映射
+src/timeutil.cpp       公历日期算法（Howard Hinnant）、时间格式化
+assets/icon.png        托盘/窗口图标
+.vendor/eui-neo        EUI-NEO 框架（vendored；含一处缩放对齐补丁，
+                       详见 core/app/glfw_app_main.cpp 中 getDpiScale 注释）
+build.ps1              CMake 一键构建
+tests/                 数据层与注册表逻辑的独立测试程序
 ```
+
+旧纯 Win32/GDI 版本（`gui.cpp/main.cpp`）已被 EUI-NEO 版本取代并移除。

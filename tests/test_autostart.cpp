@@ -1,5 +1,5 @@
 // 测试程序：验证 AutostartSet/AutostartEnabled 注册表逻辑
-#include "../src/app.h"
+#include "../src/win/autostart.h"
 #include <cstdio>
 
 int main() {

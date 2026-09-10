@@ -560,7 +560,15 @@ const DslAppConfig& dslAppConfig() {
         .iconPath(AssetAbs("icon.png"))
         .tray(true)
         .trayTitle("KeyboardStats")
-        .trayIcon(AssetAbs("icon.png"));
+        .trayIcon(AssetAbs("icon.png"))
+        .onKeyEvent([](const eui::KeyEvent& e) {
+            if (!e.isDown()) return;
+            if (e.key == eui::InputKey::Left || e.key == eui::InputKey::PageUp) {
+                g_page = 0; app::requestUpdate();
+            } else if (e.key == eui::InputKey::Right || e.key == eui::InputKey::PageDown) {
+                g_page = 1; app::requestUpdate();
+            }
+        });
     return config;
 }
 
@@ -583,3 +591,6 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
 }
 
 } // namespace app
+
+
+
