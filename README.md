@@ -58,18 +58,32 @@
 ## 代码结构
 
 ```
-src/app.cpp            EUI-NEO 声明式 UI：主题令牌、热力图页、直方图页、时段控制、
-                       Top 10 排行、日期选择器、托盘、单实例、统计服务（500ms 定时刷新）
+src/app.cpp            EUI-NEO 应用入口：运行状态、统计服务（500ms 定时刷新）、
+                       窗口最小尺寸、单实例、托盘、键盘导航
+src/theme.cpp          主题令牌（深/浅）、热度渐变、偏好文件读写
+src/fontscale.cpp      字体/控件缩放策略（自动=跟随窗口宽度 / 自定义=设置页滑块），
+                       量化 + 防抖，持久化到 ui-font.txt
+src/pages.cpp          页面绘制：头部、控制行、热力图页、Top 10 侧栏、直方图页、
+                       设置页、按键次数直方图（含悬浮提示）
+src/state.h            共享运行状态与 FetchStats 声明
+src/ui_util.h          通用小工具（颜色/编码/格式化，header-only）
 src/win/autostart.cpp  开机自启动注册表逻辑
 src/hook.cpp           WH_KEYBOARD_LL 低级键盘钩子（只观察不拦截）
 src/storage.cpp        事件缓冲落盘、按日聚合、时段查询引擎
 src/layout.h           104 键 ANSI 布局表 + 键名映射
 src/timeutil.cpp       公历日期算法（Howard Hinnant）、时间格式化
 assets/icon.png        托盘/窗口图标
-.vendor/eui-neo        EUI-NEO 框架（vendored；含一处缩放对齐补丁，
-                       详见 core/app/glfw_app_main.cpp 中 getDpiScale 注释）
 build.ps1              CMake 一键构建
 tests/                 数据层与注册表逻辑的独立测试程序
 ```
+
+## vendored 框架补丁（`.vendor/` 不受版本控制，升级框架时需重放）
+
+1. `core/app/glfw_app_main.cpp` → `getDpiScale()`：由 framebuffer/window 比例推导缩放，
+   避免 OS 报告的缩放与真实 framebuffer 不一致导致渲染与命中判定错位。
+2. `core/render/text.cpp` → 字形图集自愈：共享灰度图集只有一页且原实现无淘汰，字号持续
+   变化（设置页字体滑块 / 窗口宽度自适应）会把页面写满，之后新字形永久缺失、文字错乱。
+   现在写满时清空该页并递增“图集重置版本号”，`TextPrimitive::Impl::prepare()` 检测到版本
+   变化即丢弃失效 UV 并重建字形。
 
 旧纯 Win32/GDI 版本（`gui.cpp/main.cpp`）已被 EUI-NEO 版本取代并移除。

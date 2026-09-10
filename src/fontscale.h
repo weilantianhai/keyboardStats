@@ -13,6 +13,7 @@ extern float g_fontCustom;   // 自定义模式下的缩放值
 
 constexpr float kFontScaleMin = 0.90f;
 constexpr float kFontScaleMax = 1.60f;
+constexpr float kFontScaleStep = 0.05f;   // 量化步长：限制不同字号的种类数
 
 // 自动模式：基准宽度 1180 → 1.25，窄窗口回落、宽窗口放大
 float AutoScaleForWidth(float width);
@@ -21,7 +22,12 @@ float AutoScaleForWidth(float width);
 void UpdateUiScale(float width);
 
 void SetFontAuto(bool value);
-void SetFontCustom(float value);
+
+// 滑块入口：只登记待生效值（量化 + 防抖），拖动过程中不产生大量中间字号
+void RequestFontCustom(float value);
+float PendingFontCustom();          // 待生效值（用于界面显示）
+void TickFontScale(double nowSec);  // 由定时器调用：值稳定后应用并持久化
+
 void LoadFontPref();
 
 } // namespace app

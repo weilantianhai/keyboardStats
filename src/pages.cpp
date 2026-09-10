@@ -521,7 +521,7 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     // ── 行 2：字体大小滑块（无极）──
     const float row2 = y + Px(140.0f);
     const float sliderW = w - Px(48.0f) - Px(110.0f);
-    const float shown = g_fontAuto ? AutoScaleForWidth(screen.width) : g_fontCustom;
+    const float shown = g_fontAuto ? AutoScaleForWidth(screen.width) : PendingFontCustom();
     ui.text("set.slider.label")
         .x(x + Px(24.0f)).y(row2 - Px(26.0f)).size(w * 0.6f, Px(24.0f))
         .text("字体大小")
@@ -555,10 +555,8 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
                 .transition(Motion())
                 .onChange([](float v) {
                     if (g_fontAuto) return;   // 自动模式：滑块只读
-                    const float s = kFontScaleMin + v * (kFontScaleMax - kFontScaleMin);
-                    // 组件的同步回调可能带着量化后的值回来：差异过小不入库，避免字号漂移
-                    if (std::fabs(s - g_fontCustom) < 0.02f) return;
-                    SetFontCustom(s);
+                    // 只登记待生效值：值稳定 400ms 后才真正应用（见 TickFontScale）
+                    RequestFontCustom(kFontScaleMin + v * (kFontScaleMax - kFontScaleMin));
                     app::requestUpdate();
                 })
                 .build();

@@ -125,6 +125,8 @@ static bool StatsDiffer(const RangeStats& a, const RangeStats& b) {
 static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     StorageFlushIfDue();
 
+    TickFontScale(GetTickCount64() / 1000.0);   // 字号滑块：值稳定后才应用
+
     if (s_enforceLeft > 0) { --s_enforceLeft; EnforceMinSizeOnce(); }
 
     RangeStats fresh = QueryRange(g_rangeMode, g_customFrom, g_customTo);   // 粗比较即可
