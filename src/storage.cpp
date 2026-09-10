@@ -1,8 +1,11 @@
 #include "storage.h"
 #include "timeutil.h"
+#include "layout.h"
 #include <windows.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -142,6 +145,7 @@ long AllTimeCount(uint8_t vk) { return g_counts[vk]; }
 
 // ────────────────────────── 时间段查询 ──────────────────────────
 
+// mode: 0=今天 1=最近7天 2=最近30天 3=全部 4=自定义[from,to]
 RangeStats QueryRange(int mode, uint32_t from, uint32_t to) {
     RangeStats rs;
     uint32_t today = TodayLocal();
@@ -201,4 +205,173 @@ RangeStats QueryRange(int mode, uint32_t from, uint32_t to) {
         }
     }
     return rs;
+}
+
+// ────────────────────────── 记录管理 ──────────────────────────
+
+std::wstring StorageDirPath() { return g_dir.empty() ? DataDir() : g_dir; }
+
+static bool IsEventFile(const wchar_t* name) {
+    return wcsncmp(name, L"events-", 7) == 0 && wcslen(name) > 11;
+}
+
+// 遍历全部月度事件文件；callback 收到每一行原始文本
+static void ForEachEventLine(const std::function<void(const std::string&)>& fn) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((StorageDirPath() + L"\\events-*.jsonl").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    std::vector<std::wstring> names;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && IsEventFile(fd.cFileName)) {
+            names.push_back(fd.cFileName);
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    std::sort(names.begin(), names.end());   // 文件名含月份，升序即时间序
+    for (const std::wstring& name : names) {
+        FILE* f = _wfopen((StorageDirPath() + L"\\" + name).c_str(), L"rb");
+        if (!f) continue;
+        char line[256];
+        while (fgets(line, sizeof line, f)) {
+            const size_t len = strlen(line);
+            if (len == 0 || line[0] != '{') continue;
+            fn(std::string(line, len));
+        }
+        fclose(f);
+    }
+}
+
+StorageInfo StorageDescribe() {
+    StorageInfo info;
+    ForEachEventLine([&](const std::string& line) {
+        uint32_t ymd = 0;
+        int hour = 0;
+        uint8_t vk = 0;
+        if (!ParseEventLine(line.c_str(), &ymd, &hour, &vk)) return;
+        ++info.events;
+        if (info.firstYmd == 0 || ymd < info.firstYmd) info.firstYmd = ymd;
+        if (ymd > info.lastYmd) info.lastYmd = ymd;
+    });
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((StorageDirPath() + L"\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            if (IsEventFile(fd.cFileName)) ++info.files;
+            info.bytes += ((long long)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    return info;
+}
+
+bool StorageExportJsonl(const std::wstring& path, long* outCount) {
+    StorageFlushNow();   // 先把内存缓冲落盘，保证导出完整
+    FILE* out = _wfopen(path.c_str(), L"wb");
+    if (!out) return false;
+    long n = 0;
+    ForEachEventLine([&](const std::string& line) {
+        fputs(line.c_str(), out);
+        ++n;
+    });
+    fclose(out);
+    if (outCount) *outCount = n;
+    return true;
+}
+
+bool StorageExportCsv(const std::wstring& path, long* outCount) {
+    StorageFlushNow();
+    FILE* out = _wfopen(path.c_str(), L"wb");
+    if (!out) return false;
+    fputs("\xEF\xBB\xBF", out);             // UTF-8 BOM：Excel 直接双击也能正确识别中文
+    fputs("time,keycode,keyname\n", out);
+    long n = 0;
+    ForEachEventLine([&](const std::string& line) {
+        uint32_t ymd = 0;
+        int hour = 0;
+        uint8_t vk = 0;
+        if (!ParseEventLine(line.c_str(), &ymd, &hour, &vk)) return;
+        // 时间：取 t 字段原文
+        const char* tp = strstr(line.c_str(), "\"t\":\"");
+        char stamp[32] = {};
+        if (tp) {
+            snprintf(stamp, sizeof stamp, "%.23s", tp + 5);
+        }
+        const wchar_t* nm = StatName(vk);
+        std::string name;
+        if (nm) {
+            const int need = WideCharToMultiByte(CP_UTF8, 0, nm, -1, nullptr, 0, nullptr, nullptr);
+            if (need > 1) {
+                name.resize((size_t)need - 1);
+                WideCharToMultiByte(CP_UTF8, 0, nm, -1, name.data(), need, nullptr, nullptr);
+            }
+        } else {
+            name = "VK" + std::to_string(vk);
+        }
+        fprintf(out, "%s,%u,%s\n", stamp, (unsigned)vk, name.c_str());
+        ++n;
+    });
+    fclose(out);
+    if (outCount) *outCount = n;
+    return true;
+}
+
+long StorageImportJsonl(const std::wstring& path, std::wstring* error) {
+    FILE* in = _wfopen(path.c_str(), L"rb");
+    if (!in) {
+        if (error) *error = L"无法打开文件";
+        return -1;
+    }
+    // 按月份分组追加
+    std::map<uint32_t, std::string> byMonth;
+    long imported = 0;
+    char line[512];
+    while (fgets(line, sizeof line, in)) {
+        uint32_t ymd = 0;
+        int hour = 0;
+        uint8_t vk = 0;
+        if (!ParseEventLine(line, &ymd, &hour, &vk)) continue;   // 跳过非法行
+        const size_t len = strlen(line);
+        std::string norm(line, len);
+        if (norm.back() != '\n') norm.push_back('\n');
+        byMonth[ymd / 100] += norm;
+        ++imported;
+    }
+    fclose(in);
+    if (imported == 0) {
+        if (error) *error = L"文件中没有可识别的事件行";
+        return 0;
+    }
+    for (auto& [ym, chunk] : byMonth) {
+        wchar_t name[64];
+        swprintf(name, 64, L"\\events-%06u.jsonl", (unsigned)ym);
+        FILE* f = _wfopen((StorageDirPath() + name).c_str(), L"ab");
+        if (!f) continue;
+        fwrite(chunk.data(), 1, chunk.size(), f);
+        fclose(f);
+    }
+    StorageInit();   // 重新扫描构建内存聚合，保证一致性
+    return imported;
+}
+
+void StorageClearAll() {
+    g_evBuf.clear();
+    g_days.clear();
+    memset(g_counts, 0, sizeof g_counts);
+
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((StorageDirPath() + L"\\events-*.jsonl").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        std::vector<std::wstring> names;
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && IsEventFile(fd.cFileName)) {
+                names.push_back(fd.cFileName);
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+        for (const std::wstring& name : names) {
+            DeleteFileW((StorageDirPath() + L"\\" + name).c_str());
+        }
+    }
+    DeleteFileW((StorageDirPath() + L"\\counts.json").c_str());
 }

@@ -7,6 +7,9 @@
 #include "layout.h"
 #include "components/components.h"
 #include "timeutil.h"
+#include "win/filedialog.h"
+
+#include <shellapi.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -884,13 +887,21 @@ void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     DrawKeyHist(ui, x, histY, w, histH);
 }
 
-// 设置页：字体缩放（自动开关 + 无极滑块，统一作用于全部字号）
+// 记录管理状态（设置页）
+StorageInfo s_recInfo;
+double s_recInfoAt = 0.0;
+std::string s_recMsg;
+double s_recMsgAt = 0.0;
+int s_clearConfirm = 0;   // 0=无 1=第一次确认 2=第二次确认
+
+// 设置页：字体缩放（自动开关 + 无极滑块)+ 记录管理（导入/导出/清除）
 void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const auto tk = CurrentTheme();
     const auto& m = tk.metrics;
     const float x = Px(28.0f), y = ContentTop();
     const float w = std::min(screen.width - Px(56.0f), Px(760.0f));
-    const float h = std::max(Px(220.0f), std::min(Px(320.0f), screen.height - y - Px(24.0f)));
+    const float avail = std::max(Px(300.0f), screen.height - y - Px(24.0f));
+    const float h = std::max(Px(200.0f), std::min(Px(300.0f), avail * 0.52f));
 
     ui.rect("set.panel")
         .x(x).y(y).size(w, h)
@@ -990,13 +1001,177 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
 
     // ── 行 3：说明 ──
     ui.text("set.hint")
-        .x(x + Px(24.0f)).y(y + h - Px(66.0f)).size(w - Px(48.0f), Px(48.0f))
+        .x(x + Px(24.0f)).y(y + h - Px(60.0f)).size(w - Px(48.0f), Px(42.0f))
         .text("自动：字号随窗口宽度缩放（宽窗口更大、窄窗口更小）。\n"
               "关闭自动后，可拖动滑块统一调整界面全部字体，设置会自动保存。")
         .fontSize(m.typography.caption)
         .lineHeight(Px(22.0f))
         .color(g_theme.textMut)
         .build();
+
+    // ────────────────── 记录管理 ──────────────────
+    const double nowSec = GetTickCount64() / 1000.0;
+    if (nowSec - s_recInfoAt >= 3.0) {   // 缓存统计，避免每帧扫描文件
+        s_recInfoAt = nowSec;
+        s_recInfo = StorageDescribe();
+    }
+
+    const float bx = x, bw = w;
+    const float by = y + h + Px(16.0f);
+    const float bh = std::max(Px(180.0f), std::min(Px(240.0f), avail - h - Px(16.0f)));
+    ui.rect("rec.panel")
+        .x(bx).y(by).size(bw, bh)
+        .color(tk.surface)
+        .radius(m.radius.section)
+        .border(1.0f, g_theme.border)
+        .shadow(components::theme::shadow(tk, 18.0f, 4.0f, 0.20f, 0.10f))
+        .build();
+    ui.text("rec.title")
+        .x(bx + Px(24.0f)).y(by + Px(18.0f)).size(bw - Px(48.0f), Px(30.0f))
+        .text("记录管理")
+        .fontSize(m.typography.title)
+        .lineHeight(m.typography.title + m.typography.lineGap)
+        .color(g_theme.text)
+        .build();
+
+    // 统计行：条数 / 文件数 / 时间范围 / 占用
+    std::string stats = "暂无记录";
+    if (s_recInfo.events > 0) {
+        const std::string first = Utf8(YmdToStr(s_recInfo.firstYmd));
+        const std::string last = Utf8(YmdToStr(s_recInfo.lastYmd));
+        char sizeBuf[32];
+        if (s_recInfo.bytes >= 1024 * 1024)
+            snprintf(sizeBuf, sizeof sizeBuf, "%.1f MB", s_recInfo.bytes / 1048576.0);
+        else
+            snprintf(sizeBuf, sizeof sizeBuf, "%.0f KB", s_recInfo.bytes / 1024.0);
+        stats = WithCommas(s_recInfo.events) + " 条事件 · " + std::to_string(s_recInfo.files) +
+                " 个月度文件 · " + first + " ~ " + last + " · " + sizeBuf;
+    }
+    ui.text("rec.stats")
+        .x(bx + Px(24.0f)).y(by + Px(54.0f)).size(bw - Px(48.0f), Px(26.0f))
+        .text(stats)
+        .fontSize(m.typography.label)
+        .lineHeight(Px(24.0f))
+        .color(g_theme.textMut)
+        .build();
+
+    // 操作按钮行
+    const int btnCount = 5;
+    const float btnGap = Px(10.0f);
+    const float btnW = (bw - Px(48.0f) - btnGap * (btnCount - 1)) / (float)btnCount;
+    const float btnY = by + Px(94.0f);
+    const float btnH = Px(44.0f);
+    auto btnX = [&](int i) { return bx + Px(24.0f) + (float)i * (btnW + btnGap); };
+
+    MiniButton(ui, "rec.import", btnX(0), btnY, btnW, btnH, "导入记录", false, [] {
+        std::wstring path;
+        if (!PickOpenFile(L"导入记录（JSONL 事件文件）",
+                          L"JSONL 事件文件\0*.jsonl\0所有文件\0*.*\0\0", &path)) return;
+        std::wstring err;
+        const long n = StorageImportJsonl(path, &err);
+        if (n >= 0) {
+            FetchStats();
+            s_recInfoAt = 0.0;
+            s_recMsg = "已导入 " + WithCommas(n) + " 条事件";
+        } else {
+            s_recMsg = "导入失败：" + Utf8(err);
+        }
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
+    });
+    MiniButton(ui, "rec.expjsonl", btnX(1), btnY, btnW, btnH, "导出 JSONL", false, [] {
+        std::wstring path;
+        if (!PickSaveFile(L"导出记录（JSONL）", L"JSONL 事件文件\0*.jsonl\0所有文件\0*.*\0\0",
+                          L"jsonl", L"keyboardstats-export.jsonl", &path)) return;
+        long n = 0;
+        s_recMsg = StorageExportJsonl(path, &n) ? ("已导出 " + WithCommas(n) + " 条事件")
+                                                : "导出失败（无法写入文件）";
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
+    });
+    MiniButton(ui, "rec.expcsv", btnX(2), btnY, btnW, btnH, "导出 CSV", false, [] {
+        std::wstring path;
+        if (!PickSaveFile(L"导出记录（CSV）", L"CSV 表格\0*.csv\0所有文件\0*.*\0\0",
+                          L"csv", L"keyboardstats-export.csv", &path)) return;
+        long n = 0;
+        s_recMsg = StorageExportCsv(path, &n) ? ("已导出 " + WithCommas(n) + " 条事件")
+                                              : "导出失败（无法写入文件）";
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
+    });
+    MiniButton(ui, "rec.opendir", btnX(3), btnY, btnW, btnH, "打开数据目录", false, [] {
+        const std::wstring dir = StorageDirPath();
+        ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    });
+    MiniButton(ui, "rec.clear", btnX(4), btnY, btnW, btnH, "清除全部记录", true, [] {
+        s_clearConfirm = 1;   // 第一步确认
+        app::requestUpdate();
+    });
+
+    // 操作结果提示（显示 6 秒）
+    if (!s_recMsg.empty() && nowSec - s_recMsgAt < 6.0) {
+        ui.text("rec.msg")
+            .x(bx + Px(24.0f)).y(by + bh - Px(46.0f)).size(bw - Px(48.0f), Px(28.0f))
+            .text(s_recMsg)
+            .fontSize(m.typography.label)
+            .lineHeight(Px(26.0f))
+            .color(g_theme.text)
+            .build();
+    }
+
+    // 清除记录：两步确认弹窗
+    if (s_clearConfirm > 0) {
+        ui.rect("rec.mask")
+            .size(screen.width, screen.height)
+            .color(core::Color{0.0f, 0.0f, 0.0f, 0.45f})
+            .onClick([] { s_clearConfirm = 0; app::requestUpdate(); })
+            .build();
+        const float dw = Px(470.0f), dh = Px(210.0f);
+        const float dx = (screen.width - dw) * 0.5f, dy = (screen.height - dh) * 0.5f;
+        ui.rect("rec.dlg")
+            .x(dx).y(dy).size(dw, dh)
+            .color(tk.surface)
+            .radius(Px(14.0f))
+            .border(1.0f, g_theme.border)
+            .shadow(components::theme::shadow(tk, 28.0f, 8.0f, 0.28f, 0.16f))
+            .build();
+        ui.text("rec.dlg.title")
+            .x(dx + Px(26.0f)).y(dy + Px(22.0f)).size(dw - Px(52.0f), Px(34.0f))
+            .text(s_clearConfirm == 1 ? "确认清除全部记录？" : "再次确认：数据将永久丢失")
+            .fontSize(m.typography.title)
+            .lineHeight(m.typography.title + m.typography.lineGap)
+            .color(g_theme.text)
+            .build();
+        const std::string dlgText = (s_clearConfirm == 1)
+            ? ("将删除 " + WithCommas(s_recInfo.events) + " 条事件记录及计数缓存，"
+               "此操作不可撤销。\n如需保留，请先使用“导出 JSONL”备份。")
+            : "这是最后一次确认：点击“确认清除”后，所有记录立即删除且无法恢复。";
+        ui.text("rec.dlg.text")
+            .x(dx + Px(26.0f)).y(dy + Px(74.0f)).size(dw - Px(52.0f), Px(70.0f))
+            .text(dlgText)
+            .fontSize(m.typography.body)
+            .lineHeight(Px(28.0f))
+            .color(g_theme.textMut)
+            .build();
+        MiniButton(ui, "rec.dlg.cancel", dx + dw - Px(250.0f), dy + dh - Px(64.0f),
+                   Px(104.0f), Px(44.0f), "取消", false,
+                   [] { s_clearConfirm = 0; app::requestUpdate(); });
+        MiniButton(ui, "rec.dlg.ok", dx + dw - Px(136.0f), dy + dh - Px(64.0f),
+                   Px(110.0f), Px(44.0f),
+                   s_clearConfirm == 1 ? "继续" : "确认清除", true, [] {
+                       if (s_clearConfirm == 1) {
+                           s_clearConfirm = 2;   // 第二步确认
+                       } else {
+                           StorageClearAll();
+                           FetchStats();
+                           s_recInfoAt = 0.0;
+                           s_clearConfirm = 0;
+                           s_recMsg = "已清除全部记录";
+                           s_recMsgAt = GetTickCount64() / 1000.0;
+                       }
+                       app::requestUpdate();
+                   });
+    }
 }
 
 } // namespace app
