@@ -372,8 +372,8 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
         ui.text(id + ".t")
             .x(x).y(y).size(w, h)
             .text(Utf8(cap))
-            .fontSize(std::min(12.0f, std::max(8.0f, h * 0.30f)))
-            .lineHeight(std::min(12.0f, std::max(8.0f, h * 0.30f)))
+            .fontSize(std::min(16.0f, std::max(8.0f, h * 0.30f)))
+            .lineHeight(std::min(16.0f, std::max(8.0f, h * 0.30f)))
             .color(count > 0 ? Hex(0xFFFFFF) : kTextMut)
             .horizontalAlign(core::HorizontalAlign::Center)
             .verticalAlign(core::VerticalAlign::Center)
@@ -384,7 +384,8 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
         ui.text(id + ".c")
             .x(x).y(y + h * 0.52f).size(w, h * 0.4f)
             .text(WithCommas(count))
-            .fontSize(11.0f).lineHeight(12.0f)
+            .fontSize(std::min(15.0f, std::max(10.0f, h * 0.24f)))
+            .lineHeight(std::min(16.0f, std::max(11.0f, h * 0.26f)))
             .color(Hex(0x1E293B))
             .horizontalAlign(core::HorizontalAlign::Center)
             .verticalAlign(core::VerticalAlign::Top)
@@ -394,11 +395,14 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
 
 void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const float top = 148.0f;
-    const float availW = screen.width - 56.0f;
+    // Top10 右栏在宽窗口下固定占 250px，键盘只使用剩余区域；窄窗口隐藏右栏
+    const bool showTop10 = screen.width >= 980.0f;
+    const float railW = showTop10 ? 250.0f : 0.0f;
+    const float availW = screen.width - railW - 56.0f;
     const float availH = screen.height - top - 70.0f;
     float u = std::min(availW / 24.0f, availH / 6.0f);
-    u = std::clamp(u, 24.0f, 44.0f);
-    const float kx = (screen.width - u * 24.0f) * 0.5f;
+    u = std::clamp(u, 24.0f, 80.0f);   // 随窗口缩放，仅保留可用性下限
+    const float kx = (screen.width - railW - u * 24.0f) * 0.5f;
     const float ky = top + 12.0f;
     const float gap = 2.0f;
 
@@ -513,15 +517,22 @@ void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const float w = screen.width - 56.0f;
     const float h = screen.height - y - 24.0f;
 
-    components::barChart(ui, "hist")
+    // 必须用定位 stack 包裹：barChart 构建器没有定位方法，
+    // 直接 build 会从 (0,0) 画起并盖住顶部的页签控制行。
+    ui.stack("hist.page")
+        .x(x).y(y)
         .size(w, h)
-        .title(g_rangeText)
-        .values(g_barVals)
-        .labels(g_barLabels)
-        .theme(kTheme)
-        .transition(Motion())
+        .content([&] {
+            components::barChart(ui, "hist")
+                .size(w, h)
+                .title(g_rangeText)
+                .values(g_barVals)
+                .labels(g_barLabels)
+                .theme(kTheme)
+                .transition(Motion())
+                .build();
+        })
         .build();
-    (void)x;
 }
 
 } // namespace
@@ -582,7 +593,9 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             DrawControls(ui, screen);
             if (g_page == 0) {
                 DrawHeatPage(ui, screen);
-                DrawTop10(ui, screen);
+                if (screen.width >= 980.0f) {
+                    DrawTop10(ui, screen);
+                }
             } else {
                 DrawHistPage(ui, screen);
             }
