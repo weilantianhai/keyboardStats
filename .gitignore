@@ -1,0 +1,6 @@
+.vendor/
+build/
+.poc/build/
+.test-data/
+*.exe
+*.obj
