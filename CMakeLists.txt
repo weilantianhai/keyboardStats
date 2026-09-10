@@ -8,6 +8,8 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/.vendor/eui-neo EUI-NEO)
 
 add_executable(KeyboardStats
     src/app.cpp
+    src/theme.cpp
+    src/pages.cpp
     src/win/autostart.cpp
     src/hook.cpp
     src/storage.cpp
