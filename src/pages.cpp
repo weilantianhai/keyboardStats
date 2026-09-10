@@ -82,9 +82,13 @@ void SaveLayoutPref(const char* key, float value) {
     PrefSetValue(L"ui-layout.txt", key, buf);
 }
 
+// 最近被调节的一方：1=键盘 2=鼠标。被调方保持尺寸，另一方吸收剩余空间。
+int s_resizeDriver = 0;
+
 // 内盒右下角外侧的尺寸指示器：按住左键拖动无极调节（松手存档）
 void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
-                  float* value, float minValue, float maxValue, const char* prefKey) {
+                  float* value, float minValue, float maxValue, const char* prefKey,
+                  int driverId) {
     const float s = Px(15.0f);
     ui.rect(id)
         .x(x).y(y).size(s, s)
@@ -94,7 +98,8 @@ void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
         .states(g_theme.panelHi, g_theme.panelActive, g_theme.selected)
         .transition(Motion())
         .animate(core::AnimProperty::Color)
-        .onDrag([value, minValue, maxValue](auto& e) {
+        .onDrag([value, minValue, maxValue, driverId](auto& e) {
+            s_resizeDriver = driverId;   // 本次调节由该方主导
             const float delta = (float)(e.deltaX + e.deltaY);
             if (delta == 0.0f) return;
             *value = std::clamp(*value * (1.0f + delta / 260.0f), minValue, maxValue);
@@ -371,78 +376,107 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 }
 
-void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
+// 外盒 / 列表几何（DrawHeatPage 与 DrawKeyList 共用，避免边界公式分叉）
+struct HeatGeometry {
+    float boxX = 0.0f, boxY = 0.0f, boxW = 0.0f, boxH = 0.0f;
+    float listX = 0.0f, listY = 0.0f, listW = 0.0f, listH = 0.0f;
+    float contentX = 0.0f, contentW = 0.0f, gapX = 0.0f;
+    bool  hasList = false;
+};
+
+HeatGeometry HeatGeom(const eui::Screen& screen) {
     EnsureLayoutPrefs();
-    const float top = ContentTop();
-    const bool rail = s_top10Open && screen.width >= Px(900.0f);
-
-    const float contentX = Px(28.0f);
-    const float contentW = screen.width - Px(56.0f);
-    const float boxY = top + Px(12.0f);
-    const float boxH = std::max(Px(160.0f), screen.height - boxY - Px(72.0f));
-    const float gapX = Px(22.0f);
+    HeatGeometry g;
+    g.contentX = Px(28.0f);
+    g.contentW = screen.width - Px(56.0f);
+    g.gapX = Px(22.0f);
+    g.hasList = s_top10Open && screen.width >= Px(900.0f);
     const float listMinW = Px(210.0f);
-
-    // 盒宽由边界位置决定（有列表时留出列表最小宽度）
-    float boxW = rail ? std::clamp(contentW * s_split, Px(380.0f), contentW - listMinW - gapX)
-                      : contentW;
+    float boxW = g.hasList ? std::clamp(g.contentW * s_split, Px(380.0f),
+                                       std::max(Px(380.0f), g.contentW - listMinW - g.gapX))
+                           : g.contentW;
     boxW = std::max(boxW, Px(240.0f));
-    const float listX = contentX + boxW + gapX;
-    const float listW = rail ? std::max(Px(140.0f), contentX + contentW - listX) : 0.0f;
+    g.boxX = g.contentX;
+    g.boxY = ContentTop() + Px(12.0f);
+    g.boxW = boxW;
+    g.boxH = std::max(Px(160.0f), screen.height - g.boxY - Px(72.0f));
+    g.listX = g.contentX + boxW + g.gapX;
+    g.listY = g.boxY;
+    g.listW = g.hasList ? std::max(Px(140.0f), g.contentX + g.contentW - g.listX) : 0.0f;
+    g.listH = g.boxH;
+    return g;
+}
+
+void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
+    const HeatGeometry geo = HeatGeom(screen);
+    const float contentX = geo.contentX, contentW = geo.contentW, gapX = geo.gapX;
+    const float boxX = geo.boxX, boxY = geo.boxY, boxW = geo.boxW, boxH = geo.boxH;
+    const bool rail = geo.hasList;
 
     ui.rect("heat.box")
-        .x(contentX).y(boxY).size(boxW, boxH)
+        .x(boxX).y(boxY).size(boxW, boxH)
         .color(g_theme.panel)
         .radius(Px(12.0f))
         .border(1.0f, g_theme.border)
         .build();
 
-    // ── 盒内排布：键盘 + 鼠标；并排放不下则鼠标移到键盘下方 ──
+    // ── 盒内排布：键盘盒子 + 鼠标盒子 ──
     const float pad = Px(14.0f);
     const float innerW = std::max(Px(60.0f), boxW - pad * 2.0f);
     const float innerH = std::max(Px(60.0f), boxH - pad * 2.0f);
-    const float uMin = Px(9.0f), uMax = Px(80.0f);
-    const float mouseMinW = Px(54.0f), mouseMaxW = Px(150.0f);
     const float gapM = Px(20.0f);
+    const float kbMinW = 24.0f * Px(9.0f);        // 每键最小 9px
+    const float kbMaxW = 24.0f * Px(72.0f);
+    const float mouseMinW = Px(56.0f);
+    const float mouseMaxW = Px(200.0f);
+    const float kMouseAspect = 1.62f;             // 鼠标盒子 高/宽
 
-    auto unitFor = [&](float w, float h) {
-        if (w <= 0.0f || h <= 0.0f) return uMin;
-        return std::clamp(std::min(w / 24.0f, h / 6.0f) * s_kbScale, uMin, uMax);
-    };
+    // 参考尺寸：默认布局下的自然值，用户系数在此之上升降。
+    // 鼠标参考宽度按"键盘高度的一半左右"取，保证与键盘视觉比例协调（而不是随盒宽膨胀）
+    const float kbRefW0 = std::clamp(std::min(innerW - Px(140.0f), innerH * 4.0f), kbMinW, kbMaxW);
+    const float mouseRefW = std::clamp(kbRefW0 / 4.0f * 0.78f / kMouseAspect, mouseMinW, mouseMaxW);
+    const float kbRefW = std::clamp(std::min(innerW - mouseRefW - gapM, innerH * 4.0f),
+                                    kbMinW, kbMaxW);
+    const float totalW = std::max(Px(40.0f), innerW - gapM);
 
-    // 鼠标目标宽度：按盒宽比例，钳制在最小/最大之间
-    float mouseW = std::clamp(innerW * 0.17f * s_mouseScale, mouseMinW, mouseMaxW);
-    float mouseH = mouseW * 1.62f;
-    // 并排下限：键盘最小宽度 + 间距 + 鼠标最小宽度 仍超出 → 改为上下叠放
-    bool stacked = (24.0f * uMin + gapM + mouseMinW > innerW);
-    float u = 0.0f;
-    if (!stacked) {
-        u = unitFor(innerW - mouseW - gapM, innerH);
-        // 键盘+鼠标超出盒宽：先缩鼠标（键盘优先变宽）
-        if (24.0f * u + gapM + mouseW > innerW) {
-            mouseW = std::max(mouseMinW, innerW - gapM - 24.0f * u);
-            mouseH = mouseW * 1.62f;
-        }
-        // 鼠标已到最小值仍超出：反过来缩键盘
-        if (24.0f * u + gapM + mouseW > innerW) {
-            u = unitFor(innerW - mouseW - gapM, innerH);
-        }
-    } else {
-        mouseW = std::clamp(innerW * 0.30f * s_mouseScale, mouseMinW, mouseMaxW);
-        mouseH = std::min(mouseW * 1.62f, innerH * 0.5f);
-        u = unitFor(innerW, innerH - mouseH - gapM);
+    // 用户设定尺寸（各自最小/最大钳制），并限制不超过盒高
+    float kbWant = std::min(std::clamp(kbRefW * s_kbScale, kbMinW, kbMaxW), innerH * 4.0f);
+    float mouseWant = std::min(std::clamp(mouseRefW * s_mouseScale, mouseMinW, mouseMaxW),
+                               innerH / kMouseAspect);
+
+    float kbW = 0.0f, mouseW = 0.0f;
+    bool stacked = false;
+    if (s_resizeDriver == 2) {                    // 刚调鼠标：鼠标保持，键盘吸收剩余
+        mouseW = mouseWant;
+        kbW = std::min(totalW - mouseW, kbMaxW);
+        if (kbW < kbMinW) { kbW = kbMinW; stacked = true; }   // 键盘已到下限仍放不下 → 叠放
+    } else {                                      // 键盘主导（含初始）
+        kbW = kbWant;
+        // 鼠标吸收剩余空间，但不超过"键盘高度 × 0.95"的视觉比例（避免鼠标比键盘还高）
+        const float mouseCap = std::max(mouseMinW, kbW * 0.95f / (4.0f * kMouseAspect));
+        mouseW = std::min({totalW - kbW, mouseMaxW, mouseCap});
+        if (mouseW < mouseMinW) { mouseW = mouseMinW; stacked = true; }
     }
-    u = std::max(u, Px(6.0f));
 
-    const float kbW = 24.0f * u, kbH = 6.0f * u;
+    float mouseH = mouseW * kMouseAspect;
+    if (stacked) {                                 // 叠放：保留用户尺寸，超出盒高交给滚动条
+        kbW = std::min(std::clamp(kbRefW * s_kbScale, kbMinW, kbMaxW), innerW);
+        mouseW = std::min(std::clamp(mouseRefW * 1.25f * s_mouseScale, mouseMinW, mouseMaxW), innerW);
+        mouseH = mouseW * kMouseAspect;
+    }
+    const float u = std::max(Px(6.0f), kbW / 24.0f);
+    const float kbH = 6.0f * u;
+    kbW = 24.0f * u;
     const float contentH = stacked ? (kbH + gapM + mouseH) : std::max(kbH, mouseH);
-    const bool needScroll = stacked && (contentH > innerH);
+    const bool needScroll = contentH > innerH;
     const float drawH = needScroll ? contentH : innerH;
 
-    // 键盘左上、鼠标右侧或下方
-    const float kbX = std::max(0.0f, (innerW - (stacked ? kbW : kbW + gapM + mouseW)) * 0.5f);
-    const float mouseX = stacked ? std::max(0.0f, (innerW - mouseW) * 0.5f) : (kbX + kbW + gapM);
-    const float mouseY = stacked ? (kbH + gapM) : std::max(0.0f, (innerH - mouseH) * 0.5f);
+    // 位置：组居中；并排=键盘左鼠标右，叠放=键盘上鼠标下
+    const float groupW = stacked ? std::max(kbW, mouseW) : (kbW + gapM + mouseW);
+    const float gx = std::max(0.0f, (innerW - groupW) * 0.5f);
+    const float kbX = stacked ? (gx + (groupW - kbW) * 0.5f) : gx;
+    const float mouseX = stacked ? (gx + (groupW - mouseW) * 0.5f) : (gx + kbW + gapM);
+    const float mouseY = stacked ? (kbH + gapM) : std::max(0.0f, (kbH - mouseH) * 0.5f);
 
     auto drawContent = [&](core::dsl::Ui& c) {
         const float gap = 2.0f;
@@ -469,13 +503,13 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         ResizeHandle(c, "kb.handle",
                      std::min(kbX + kbW + kbp + Px(5.0f), innerW - hs),
                      std::min(kbH + kbp + Px(5.0f), drawH - hs),
-                     &s_kbScale, 0.6f, 1.6f, "kb");
+                     &s_kbScale, 0.6f, 1.6f, "kb", 1);
         // 鼠标盒子（大盒子内的子盒）
         DrawMousePanel(c, mouseX, mouseY, mouseW, mouseH);
         ResizeHandle(c, "mouse.handle",
                      std::min(mouseX + mouseW + Px(5.0f), innerW - hs),
                      std::min(mouseY + mouseH + Px(5.0f), drawH - hs),
-                     &s_mouseScale, 0.6f, 1.8f, "mouse");
+                     &s_mouseScale, 0.6f, 1.8f, "mouse", 2);
     };
 
     if (needScroll) {
@@ -535,18 +569,10 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
 // 右侧按键列表：全部有记录的按键（含鼠标/滚轮）按次数降序，内容超出高度即自动出滚动条
 // 位置与宽度由外盒/列表之间的边界（SplitDivider）决定
 void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
-    if (!(s_top10Open && screen.width >= Px(900.0f))) return;
-    EnsureLayoutPrefs();
+    const HeatGeometry geo = HeatGeom(screen);
+    if (!geo.hasList) return;
 
-    const float contentX = Px(28.0f);
-    const float contentW = screen.width - Px(56.0f);
-    const float gapX = Px(22.0f);
-    const float boxW = std::max(Px(240.0f),
-                                std::clamp(contentW * s_split, Px(380.0f), contentW - Px(210.0f) - gapX));
-    const float x = contentX + boxW + gapX;
-    const float w = std::max(Px(140.0f), contentX + contentW - x);
-    const float y = ContentTop() + Px(12.0f);
-    const float h = std::max(Px(160.0f), screen.height - y - Px(72.0f));
+    const float x = geo.listX, y = geo.listY, w = geo.listW, h = geo.listH;
 
     ui.rect("list.panel")
         .x(x).y(y).size(w, h)
