@@ -94,18 +94,29 @@ void FetchStats() {
         g_barLabels.push_back(Utf8(b.label));
     }
 
+    // 按键分布：全键参与（含小键盘与鼠标伪键），未使用的计数为 0，升序排列。
+    // 这样小键盘数字（1`、2`…）即使在未使用/NumLock 关闭时也能在直方图中被识别。
     g_keyHist.clear();
-    std::vector<std::pair<long, int>> ranked;   // (count, vk)，降序
-    for (int vk = 0; vk < 256; ++vk)
-        if (s.counts[vk] > 0) ranked.push_back({s.counts[vk], vk});
-    std::sort(ranked.begin(), ranked.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
-    long top1 = ranked.empty() ? 0 : ranked.front().first;
-    // 直方图要求升序：倒序取用（最小 → 最大）
-    for (size_t i = ranked.size(); i > 0; --i) {
-        g_keyHist.push_back({Utf8(StatName((uint8_t)ranked[i - 1].second)),
-                             ranked[i - 1].first,
-                             top1 > 0 ? (float)ranked[i - 1].first / (float)top1 : 0.0f});
+    {
+        std::vector<std::pair<long, std::string>> all;
+        std::vector<uint8_t> seen;
+        auto add = [&](uint8_t vk) {
+            for (uint8_t s : seen) if (s == vk) return;   // 主键区/小键盘的回车等重复键码
+            seen.push_back(vk);
+            const wchar_t* nm = StatName(vk);
+            all.push_back({(vk < 256) ? s.counts[vk] : 0, nm ? Utf8(nm) : ("VK" + std::to_string(vk))});
+        };
+        for (int i = 0; i < kKeyCount; ++i) add(kKeys[i].vk);
+        for (uint8_t vk : {kMouseLeft, kMouseRight, kMouseMiddle, kMouseX1, kMouseX2,
+                           kWheelUp, kWheelDown, kWheelLeft, kWheelRight}) add(vk);
+        long top1 = 0;
+        for (const auto& kv : all) top1 = std::max(top1, kv.first);
+        std::stable_sort(all.begin(), all.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const auto& kv : all) {
+            g_keyHist.push_back({kv.second, kv.first,
+                                 top1 > 0 ? (float)kv.first / (float)top1 : 0.0f});
+        }
     }
 
     g_stats = std::move(s);
