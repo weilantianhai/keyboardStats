@@ -38,17 +38,10 @@ uint32_t TodayLocal() {
     return JoinYmd(t.wYear, t.wMonth, t.wDay);
 }
 
-uint32_t NowYm() {
-    SYSTEMTIME t; GetLocalTime(&t);
-    return t.wYear * 100 + t.wMonth;
-}
-
 int NowHour() {
     SYSTEMTIME t; GetLocalTime(&t);
     return t.wHour;
 }
-
-uint32_t YmOf(uint32_t ymd) { return ymd / 100; }
 
 uint32_t AddDays(uint32_t ymd, int delta) {
     int y; unsigned m, d;

@@ -8,6 +8,7 @@
 #include "components/components.h"
 #include "timeutil.h"
 #include "win/filedialog.h"
+#include "win/autostart.h"
 
 #include <shellapi.h>
 
@@ -294,8 +295,11 @@ void DrawHeader(core::dsl::Ui& ui, float w) {
     MiniButton(ui, "hd.top10", w - 306.0f, by, 160.0f, bh,
                s_top10Open ? "隐藏按键列表" : "显示按键列表", false,
                [] { s_top10Open = !s_top10Open; app::requestUpdate(); });
-    MiniButton(ui, "hd.theme", w - 136.0f, by, 108.0f, bh,
-               g_lightMode ? "深色模式" : "浅色模式", false, ToggleTheme);
+    // 主题切换已独立成"主题"页，这里只留一个快捷入口
+    MiniButton(ui, "hd.theme", w - 136.0f, by, 108.0f, bh, "主题", false, [] {
+        g_page = 3;
+        app::requestUpdate();
+    });
 }
 
 void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
@@ -305,11 +309,11 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
     // segmented 组件自身无定位方法，用带位置的 stack 容器承载
     // 横向位置/宽度不随缩放变化（受窗口宽度约束），只缩放高度
     ui.stack("ctrl.page")
-        .x(28.0f).y(y).size(300.0f, h)
+        .x(28.0f).y(y).size(340.0f, h)
         .content([&] {
             components::segmented(ui, "seg.page")
-                .size(300.0f, h)
-                .items({"热力图", "直方图", "设置"})
+                .size(340.0f, h)
+                .items({"热力图", "直方图", "设置", "主题"})
                 .selected(g_page)
                 .theme(CurrentTheme())
                 .transition(Motion())
@@ -319,10 +323,10 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 
     ui.stack("ctrl.range")
-        .x(340.0f).y(y).size(420.0f, h)
+        .x(380.0f).y(y).size(360.0f, h)
         .content([&] {
             components::segmented(ui, "seg.range")
-                .size(420.0f, h)
+                .size(360.0f, h)
                 .items({"今天", "7 天", "30 天", "全部"})
                 .selected(g_rangeMode <= 3 ? g_rangeMode : 3)
                 .theme(CurrentTheme())
@@ -342,11 +346,11 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         return s.size() >= 10 ? s.substr(5) : s;
     };
 
-    MiniButton(ui, "btn.from", 768.0f, y, 120.0f, h, "从 " + ymdStr(g_pendingFrom),
+    MiniButton(ui, "btn.from", 750.0f, y, 112.0f, h, "从 " + ymdStr(g_pendingFrom),
                false, [] { g_fromOpen.set(!g_fromOpen.get()); });
-    MiniButton(ui, "btn.to", 896.0f, y, 120.0f, h, "至 " + ymdStr(g_pendingTo),
+    MiniButton(ui, "btn.to", 870.0f, y, 112.0f, h, "至 " + ymdStr(g_pendingTo),
                false, [] { g_toOpen.set(!g_toOpen.get()); });
-    MiniButton(ui, "btn.apply", 1024.0f, y, 76.0f, h, "应用", true, [] {
+    MiniButton(ui, "btn.apply", 990.0f, y, 72.0f, h, "应用", true, [] {
         if (g_pendingFrom && g_pendingTo) {
             g_customFrom = g_pendingFrom;
             g_customTo = g_pendingTo;
@@ -894,14 +898,32 @@ std::string s_recMsg;
 double s_recMsgAt = 0.0;
 int s_clearConfirm = 0;   // 0=无 1=第一次确认 2=第二次确认
 
-// 设置页：字体缩放（自动开关 + 无极滑块)+ 记录管理（导入/导出/清除）
-void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
-    const auto tk = CurrentTheme();
+// 切换数据文件夹：原文件夹里发现数据文件时，先弹窗问是否一起搬走
+std::wstring s_pendingDir;    // 待切换的目标文件夹（非空 = 显示确认框）
+int s_pendingDirFiles = 0;    // 待搬运的数据文件个数
+
+// 滚动位置（跨帧保持）
+eui::Signal<float> s_settingsScroll{0.0f};
+eui::Signal<float> s_themeScroll{0.0f};
+
+// 主题页三个面板的高度（同设置页：按内容固定，不跟窗口高度挂钩）
+constexpr float kPalettePanelH = 258.0f;
+constexpr float kHeatPanelH    = 196.0f;
+constexpr float kCustomPanelH  = 196.0f;
+
+// 两个面板的高度按"内容需要"固定，不随窗口高度压缩：
+// 之前按可用高度取比例，窗口一小面板就比内容矮，说明文字会和滑块叠在一起，
+// 底部的按钮也会被窗口裁掉。现在改为固定内容高度 + 外层滚动视图。
+constexpr float kFontPanelH = 322.0f;
+constexpr float kRecPanelH  = 276.0f;
+constexpr float kPanelGap   = 12.0f;
+
+// 字体设置面板：画在"滚动内容坐标系"里（原点 = 内容左上角，宽 = w）
+static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
+                          const components::theme::ThemeColorTokens& tk, float screenWidth) {
     const auto& m = tk.metrics;
-    const float x = Px(28.0f), y = ContentTop();
-    const float w = std::min(screen.width - Px(56.0f), Px(760.0f));
-    const float avail = std::max(Px(300.0f), screen.height - y - Px(24.0f));
-    const float h = std::max(Px(200.0f), std::min(Px(300.0f), avail * 0.52f));
+    const float x = 0.0f;
+    const float h = Px(kFontPanelH);
 
     ui.rect("set.panel")
         .x(x).y(y).size(w, h)
@@ -943,9 +965,37 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 
     // ── 行 2：字体大小滑块（无极）──
-    const float row2 = y + Px(140.0f);
+    // ── 行 2：开机自启动（只拉起记录程序 + 托盘图标，不带图形界面）──
+    const float rowAuto = y + Px(120.0f);
+    ui.text("set.autostart.label")
+        .x(x + Px(24.0f)).y(rowAuto).size(w * 0.62f, Px(30.0f))
+        .text("开机自启动（后台记录 + 托盘）")
+        .fontSize(m.typography.body)
+        .lineHeight(Px(30.0f))
+        .color(g_theme.text)
+        .build();
+    ui.stack("set.autostart.row")
+        .x(x + w - Px(160.0f)).y(rowAuto - Px(4.0f)).size(Px(136.0f), Px(38.0f))
+        .content([&] {
+            components::toggleSwitch(ui, "set.autostart")
+                .size(Px(136.0f), Px(38.0f))
+                .checked(AutostartEnabled())
+                .text("自启动")
+                .theme(tk)
+                .transition(Motion())
+                .onChange([](bool v) {
+                    AutostartSet(v);
+                    s_recMsg = v ? "已开启开机自启动（只启动记录程序）" : "已关闭开机自启动";
+                    s_recMsgAt = GetTickCount64() / 1000.0;
+                    app::requestUpdate();
+                })
+                .build();
+        })
+        .build();
+
+    const float row2 = y + Px(184.0f);
     const float sliderW = w - Px(48.0f) - Px(110.0f);
-    const float shown = g_fontAuto ? AutoScaleForWidth(screen.width) : g_fontCustom;
+    const float shown = g_fontAuto ? AutoScaleForWidth(screenWidth) : g_fontCustom;
     ui.text("set.slider.label")
         .x(x + Px(24.0f)).y(row2 - Px(26.0f)).size(w * 0.6f, Px(24.0f))
         .text("字体大小")
@@ -1009,16 +1059,22 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .color(g_theme.textMut)
         .build();
 
-    // ────────────────── 记录管理 ──────────────────
+}
+
+// 记录管理面板（含数据文件夹/数据文件两行）：同样画在滚动内容坐标系里
+static void DrawRecordPanel(core::dsl::Ui& ui, float w, float y,
+                            const components::theme::ThemeColorTokens& tk) {
+    const auto& m = tk.metrics;
+
     const double nowSec = GetTickCount64() / 1000.0;
     if (nowSec - s_recInfoAt >= 3.0) {   // 缓存统计，避免每帧扫描文件
         s_recInfoAt = nowSec;
         s_recInfo = StorageDescribe();
     }
 
-    const float bx = x, bw = w;
-    const float by = y + h + Px(16.0f);
-    const float bh = std::max(Px(180.0f), std::min(Px(240.0f), avail - h - Px(16.0f)));
+    const float bx = 0.0f, bw = w;
+    const float by = y;
+    const float bh = Px(kRecPanelH);
     ui.rect("rec.panel")
         .x(bx).y(by).size(bw, bh)
         .color(tk.surface)
@@ -1045,7 +1101,7 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         else
             snprintf(sizeBuf, sizeof sizeBuf, "%.0f KB", s_recInfo.bytes / 1024.0);
         stats = WithCommas(s_recInfo.events) + " 条事件 · " + std::to_string(s_recInfo.files) +
-                " 个月度文件 · " + first + " ~ " + last + " · " + sizeBuf;
+                " 个数据文件 · " + first + " ~ " + last + " · " + sizeBuf;
     }
     ui.text("rec.stats")
         .x(bx + Px(24.0f)).y(by + Px(54.0f)).size(bw - Px(48.0f), Px(26.0f))
@@ -1055,26 +1111,144 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .color(g_theme.textMut)
         .build();
 
+    // ────────────────── 数据位置（文件夹 / 文件）──────────────────
+    // 路径可能很长，中间省略以保证一行放得下
+    auto elide = [](const std::string& s, size_t keep) {
+        if (s.size() <= keep) return s;
+        return s.substr(0, keep / 2 - 1) + "…" + s.substr(s.size() - (keep / 2 - 2));
+    };
+
+    const float miniH = Px(32.0f), miniGap = Px(8.0f);
+    const float right = bx + bw - Px(24.0f);
+    const float wSecond = Px(58.0f), wFirst = Px(72.0f);   // 数据文件夹行：主操作 + 复位
+    const float valueW = right - (wFirst + wSecond + miniGap * 2) - (bx + Px(24.0f) + Px(88.0f));
+    const float folderY = by + Px(86.0f);
+    const float fileY = by + Px(126.0f);
+    // 数据文件行有 3 个按钮（新建/选择/自动），宽度按同样比例分配
+    const float fNew = Px(58.0f), fPick = Px(58.0f), fAuto = Px(58.0f);
+    const float fileValueW = right - (fNew + fPick + fAuto + miniGap * 2) - (bx + Px(24.0f) + Px(88.0f));
+
+    // 目标文件夹里没有数据文件时直接切换；有则记下来弹确认框
+    auto requestFolderChange = [&](const std::wstring& dir) {
+        const int n = (int)DataFilesInFolder(DataFolderPath()).size();
+        if (n == 0) {
+            std::wstring err;
+            if (StorageSetDataFolder(dir, false, &err, nullptr)) {
+                FetchStats();
+                s_recInfoAt = 0.0;
+                s_recMsg = "数据文件夹已切换到 " + Utf8(dir);
+            } else {
+                s_recMsg = "切换失败：" + Utf8(err);
+            }
+            s_recMsgAt = GetTickCount64() / 1000.0;
+            app::requestUpdate();
+            return;
+        }
+        s_pendingDir = dir;
+        s_pendingDirFiles = n;
+        app::requestUpdate();
+    };
+
+    auto pathRow = [&](const char* id, float rowY, const char* label, const std::string& value,
+                       float textW) {
+        ui.text(std::string(id) + ".label")
+            .x(bx + Px(24.0f)).y(rowY + Px(6.0f)).size(Px(88.0f), Px(24.0f))
+            .text(label)
+            .fontSize(m.typography.label)
+            .lineHeight(Px(24.0f))
+            .color(g_theme.textMut)
+            .build();
+        ui.text(std::string(id) + ".value")
+            .x(bx + Px(24.0f) + Px(88.0f)).y(rowY + Px(6.0f)).size(textW, Px(24.0f))
+            .text(value)
+            .fontSize(m.typography.body)
+            .lineHeight(Px(24.0f))
+            .color(g_theme.text)
+            .build();
+    };
+
+    pathRow("rec.folder", folderY, "数据文件夹",
+            elide(Utf8(DataFolderPath()), (size_t)std::max(12.0f, valueW / Px(7.0f))), valueW);
+    MiniButton(ui, "rec.folder.pick", right - (wFirst + wSecond + miniGap), folderY,
+               wFirst, miniH, "更改", false, [requestFolderChange] {
+        std::wstring dir;
+        if (!PickFolder(L"选择数据文件夹", &dir)) return;
+        requestFolderChange(dir);
+    });
+    MiniButton(ui, "rec.folder.def", right - wSecond, folderY, wSecond, miniH, "默认", false,
+               [requestFolderChange] {
+        requestFolderChange(DefaultDataFolder());
+    });
+
+    const std::wstring curFile = DataFileName();
+    pathRow("rec.file", fileY, "数据文件",
+            elide(curFile.empty() ? std::string("自动（按月 events-YYYYMM.jsonl）") : Utf8(curFile),
+                  (size_t)std::max(12.0f, fileValueW / Px(7.0f))), fileValueW);
+    MiniButton(ui, "rec.file.new", right - (fNew + fPick + fAuto + miniGap * 2), fileY,
+               fNew, miniH, "新建", false, [] {
+        std::wstring name, err;
+        if (StorageCreateDataFile(&name, &err)) {
+            FetchStats();
+            s_recInfoAt = 0.0;
+            s_recMsg = "已新建并切换到 " + Utf8(name);
+        } else {
+            s_recMsg = "新建失败：" + Utf8(err);
+        }
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
+    });
+    MiniButton(ui, "rec.file.pick", right - (fPick + fAuto + miniGap), fileY,
+               fPick, miniH, "选择", false, [] {
+        std::wstring path;
+        if (!PickOpenFile(L"选择数据文件（JSONL 事件文件）",
+                          L"JSONL 事件文件\0*.jsonl\0所有文件\0*.*\0\0", &path,
+                          DataFolderPath())) return;   // 从数据文件夹打开，别让用户自己找
+        std::wstring err;
+        const long n = StorageAdoptJsonl(path, &err);
+        if (n >= 0) {
+            FetchStats();
+            s_recInfoAt = 0.0;
+            s_recMsg = "已切换到 " + Utf8(DataFileName()) + "（" + WithCommas(n) + " 条事件）";
+        } else {
+            s_recMsg = "切换失败：" + Utf8(err);
+        }
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
+    });
+    MiniButton(ui, "rec.file.auto", right - fAuto, fileY, fAuto, miniH, "自动", false, [] {
+        std::wstring err;
+        if (StorageSetDataFile(L"", &err)) {
+            FetchStats();
+            s_recInfoAt = 0.0;
+            s_recMsg = "已恢复按月自动数据文件";
+        } else {
+            s_recMsg = "恢复失败：" + Utf8(err);
+        }
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
+    });
+
     // 操作按钮行
     const int btnCount = 5;
     const float btnGap = Px(10.0f);
     const float btnW = (bw - Px(48.0f) - btnGap * (btnCount - 1)) / (float)btnCount;
-    const float btnY = by + Px(94.0f);
+    const float btnY = by + Px(176.0f);
     const float btnH = Px(44.0f);
     auto btnX = [&](int i) { return bx + Px(24.0f) + (float)i * (btnW + btnGap); };
 
-    MiniButton(ui, "rec.import", btnX(0), btnY, btnW, btnH, "导入记录", false, [] {
+    MiniButton(ui, "rec.import", btnX(0), btnY, btnW, btnH, "转入文件", false, [] {
         std::wstring path;
-        if (!PickOpenFile(L"导入记录（JSONL 事件文件）",
-                          L"JSONL 事件文件\0*.jsonl\0所有文件\0*.*\0\0", &path)) return;
+        if (!PickOpenFile(L"转入数据文件（会移动到数据文件夹并切换）",
+                          L"JSONL 事件文件\0*.jsonl\0所有文件\0*.*\0\0", &path,
+                          DataFolderPath())) return;
         std::wstring err;
-        const long n = StorageImportJsonl(path, &err);
+        const long n = StorageAdoptJsonl(path, &err);
         if (n >= 0) {
             FetchStats();
             s_recInfoAt = 0.0;
-            s_recMsg = "已导入 " + WithCommas(n) + " 条事件";
+            s_recMsg = "已转入并切换，共 " + WithCommas(n) + " 条事件";
         } else {
-            s_recMsg = "导入失败：" + Utf8(err);
+            s_recMsg = "转入失败：" + Utf8(err);
         }
         s_recMsgAt = GetTickCount64() / 1000.0;
         app::requestUpdate();
@@ -1082,7 +1256,8 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     MiniButton(ui, "rec.expjsonl", btnX(1), btnY, btnW, btnH, "导出 JSONL", false, [] {
         std::wstring path;
         if (!PickSaveFile(L"导出记录（JSONL）", L"JSONL 事件文件\0*.jsonl\0所有文件\0*.*\0\0",
-                          L"jsonl", L"keyboardstats-export.jsonl", &path)) return;
+                          L"jsonl", L"keyboardstats-export.jsonl", &path,
+                          DataFolderPath())) return;
         long n = 0;
         s_recMsg = StorageExportJsonl(path, &n) ? ("已导出 " + WithCommas(n) + " 条事件")
                                                 : "导出失败（无法写入文件）";
@@ -1092,7 +1267,8 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     MiniButton(ui, "rec.expcsv", btnX(2), btnY, btnW, btnH, "导出 CSV", false, [] {
         std::wstring path;
         if (!PickSaveFile(L"导出记录（CSV）", L"CSV 表格\0*.csv\0所有文件\0*.*\0\0",
-                          L"csv", L"keyboardstats-export.csv", &path)) return;
+                          L"csv", L"keyboardstats-export.csv", &path,
+                          DataFolderPath())) return;
         long n = 0;
         s_recMsg = StorageExportCsv(path, &n) ? ("已导出 " + WithCommas(n) + " 条事件")
                                               : "导出失败（无法写入文件）";
@@ -1100,22 +1276,92 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         app::requestUpdate();
     });
     MiniButton(ui, "rec.opendir", btnX(3), btnY, btnW, btnH, "打开数据目录", false, [] {
-        const std::wstring dir = StorageDirPath();
-        ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        // 明确打开"当前数据文件夹"，并把路径回显到提示行：
+        // 之前数据文件夹默认在 exe 同级，打开后看着像打开了程序目录，容易误判。
+        const std::wstring dir = DataFolderPath();
+        if (GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES)
+            CreateDirectoryW(dir.c_str(), nullptr);   // 还没建出来就先建，别静默失败
+        const HINSTANCE r = ShellExecuteW(nullptr, L"open", dir.c_str(), nullptr, nullptr,
+                                          SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(r) <= 32) {
+            s_recMsg = "打开失败：" + Utf8(dir);
+        } else {
+            s_recMsg = "已打开 " + Utf8(dir);
+        }
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
     });
     MiniButton(ui, "rec.clear", btnX(4), btnY, btnW, btnH, "清除全部记录", true, [] {
         s_clearConfirm = 1;   // 第一步确认
         app::requestUpdate();
     });
 
-    // 操作结果提示（显示 6 秒）
+    // 操作结果提示（显示 6 秒）：固定在按钮行下方，不再用面板底边反推
     if (!s_recMsg.empty() && nowSec - s_recMsgAt < 6.0) {
         ui.text("rec.msg")
-            .x(bx + Px(24.0f)).y(by + bh - Px(46.0f)).size(bw - Px(48.0f), Px(28.0f))
+            .x(bx + Px(24.0f)).y(by + Px(228.0f)).size(bw - Px(48.0f), Px(28.0f))
             .text(s_recMsg)
             .fontSize(m.typography.label)
             .lineHeight(Px(26.0f))
             .color(g_theme.text)
+            .build();
+    }
+}
+
+// 设置页：内容整体放进滚动视图，窗口再矮也不会重叠或截断
+void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
+    const auto tk = CurrentTheme();
+    const auto& m = tk.metrics;
+    const float x = Px(28.0f), y = ContentTop();
+    const float w = std::min(screen.width - Px(56.0f), Px(760.0f));
+    const float viewH = std::max(Px(120.0f), screen.height - y - Px(24.0f));
+    const float gapY = Px(kPanelGap);
+
+    const float contentH = Px(kFontPanelH) + gapY + Px(kRecPanelH);
+
+    components::scrollView(ui, "set.scroll")
+        .position(x, y)
+        .size(w, viewH)
+        .gap(gapY)
+        .step(Px(52.0f))
+        // 框架内置滚动条在本项目这套主题下基本看不见，滑块改为下面自己画：
+        // 宽度设 0 关掉内置的（避免两条重叠），只保留 gap 把内容区让出右侧一条。
+        .scrollbarWidth(0.0f)
+        .scrollbarGap(Px(16.0f))
+        .theme(tk)
+        .bind(s_settingsScroll)
+        .content([&](core::dsl::Ui& su, float contentW, float) {
+            // 内容画在一个尺寸明确的画布上（框架示例的写法）：绝对定位的子元素
+            // 不会给 wrapContent 的列贡献高度，不套画布的话内容高度算成 0。
+            su.stack("set.canvas")
+                .size(contentW, Px(kFontPanelH) + gapY + Px(kRecPanelH))
+                .content([&] {
+                    DrawFontPanel(su, contentW, 0.0f, tk, screen.width);
+                    DrawRecordPanel(su, contentW, Px(kFontPanelH) + gapY, tk);
+                })
+                .build();
+        })
+        .build();
+
+    // 自己画滑块：框架内置的滚动条在本项目这套主题/尺寸下不显示（已用像素采样确认
+    // 面板右侧整条都是背景色），所以用滚动信号自己画一根，保证"能滚"这件事可见。
+    if (contentH > viewH) {
+        const float barW = Px(6.0f);
+        const float barX = x + w - barW;
+        const float maxOff = contentH - viewH;
+        const float thumbH = std::max(Px(48.0f), viewH * (viewH / contentH));
+        const float off = std::clamp(s_settingsScroll.get(), 0.0f, maxOff);
+        const float thumbY = y + (viewH - thumbH) * (off / maxOff);
+
+        ui.rect("set.scroll.track")
+            .x(barX).y(y).size(barW, viewH)
+            .color(components::theme::withOpacity(g_theme.border, 0.35f))
+            .radius(barW * 0.5f)
+            .build();
+        ui.rect("set.scroll.thumb")
+            .x(barX).y(thumbY).size(barW, thumbH)
+            .color(components::theme::withOpacity(g_theme.textMut, 0.75f))
+            .radius(barW * 0.5f)
             .build();
     }
 
@@ -1172,6 +1418,431 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
                        app::requestUpdate();
                    });
     }
+
+    // 切换数据文件夹：原文件夹里有数据文件时，问是否一起搬走
+    if (!s_pendingDir.empty()) {
+        ui.rect("dir.mask")
+            .size(screen.width, screen.height)
+            .color(core::Color{0.0f, 0.0f, 0.0f, 0.45f})
+            .onClick([] { s_pendingDir.clear(); app::requestUpdate(); })
+            .build();
+        const float dw = Px(520.0f), dh = Px(230.0f);
+        const float dx = (screen.width - dw) * 0.5f, dy = (screen.height - dh) * 0.5f;
+        ui.rect("dir.dlg")
+            .x(dx).y(dy).size(dw, dh)
+            .color(tk.surface)
+            .radius(Px(14.0f))
+            .border(1.0f, g_theme.border)
+            .shadow(components::theme::shadow(tk, 28.0f, 8.0f, 0.28f, 0.16f))
+            .build();
+        ui.text("dir.dlg.title")
+            .x(dx + Px(26.0f)).y(dy + Px(22.0f)).size(dw - Px(52.0f), Px(34.0f))
+            .text("切换数据文件夹")
+            .fontSize(m.typography.title)
+            .lineHeight(m.typography.title + m.typography.lineGap)
+            .color(g_theme.text)
+            .build();
+        const std::string dirDlgText =
+            "新文件夹：" + Utf8(s_pendingDir) + "\n当前数据文件夹里有 " +
+            std::to_string(s_pendingDirFiles) + " 个数据文件。是否把它们一起移动过去？";
+        ui.text("dir.dlg.text")
+            .x(dx + Px(26.0f)).y(dy + Px(74.0f)).size(dw - Px(52.0f), Px(70.0f))
+            .text(dirDlgText)
+            .fontSize(m.typography.body)
+            .lineHeight(Px(28.0f))
+            .color(g_theme.textMut)
+            .build();
+        MiniButton(ui, "dir.dlg.cancel", dx + Px(26.0f), dy + dh - Px(64.0f),
+                   Px(96.0f), Px(44.0f), "取消", false,
+                   [] { s_pendingDir.clear(); app::requestUpdate(); });
+        MiniButton(ui, "dir.dlg.keep", dx + dw - Px(300.0f), dy + dh - Px(64.0f),
+                   Px(120.0f), Px(44.0f), "仅切换", false, [] {
+                       const std::wstring dir = s_pendingDir;
+                       s_pendingDir.clear();
+                       std::wstring err;
+                       if (StorageSetDataFolder(dir, false, &err, nullptr)) {
+                           FetchStats();
+                           s_recInfoAt = 0.0;
+                           s_recMsg = "已切换（原数据留在原文件夹）";
+                       } else {
+                           s_recMsg = "切换失败：" + Utf8(err);
+                       }
+                       s_recMsgAt = GetTickCount64() / 1000.0;
+                       app::requestUpdate();
+                   });
+        MiniButton(ui, "dir.dlg.move", dx + dw - Px(170.0f), dy + dh - Px(64.0f),
+                   Px(144.0f), Px(44.0f), "一起移动", true, [] {
+                       const std::wstring dir = s_pendingDir;
+                       s_pendingDir.clear();
+                       std::wstring err;
+                       FolderSwitchResult r;
+                       if (StorageSetDataFolder(dir, true, &err, &r)) {
+                           FetchStats();
+                           s_recInfoAt = 0.0;
+                           s_recMsg = "已切换，移动 " + std::to_string(r.moved) + " 个数据文件";
+                           if (r.failed > 0)
+                               s_recMsg += "，" + std::to_string(r.failed) + " 个失败（可能被占用）";
+                       } else {
+                           s_recMsg = "切换失败：" + Utf8(err);
+                       }
+                       s_recMsgAt = GetTickCount64() / 1000.0;
+                       app::requestUpdate();
+                   });
+    }
+}
+
+// ────────────────────────── 主题页 ──────────────────────────
+
+namespace {
+
+// 自定义配色 / 自定义热力的取色目标（非空 = 取色面板打开）
+std::string s_pickerTarget;
+// 自定义方案是否走深色底（浅色底会让强调色更难压住）
+bool s_customDark = true;
+
+// 带色块的方案按钮：左侧一个小色片，右侧文字
+void SwatchButton(core::dsl::Ui& ui, const std::string& id, float x, float y, float w, float h,
+                  const std::string& label, core::Color chipA, core::Color chipB,
+                  bool selected, std::function<void()> onClick) {
+    const float r = Px(10.0f);
+    ui.rect(id + ".bg")
+        .x(x).y(y).size(w, h)
+        .states(g_theme.panel, g_theme.panelHi, g_theme.panelActive)
+        .radius(r)
+        .border(selected ? 2.0f : 1.0f, selected ? g_theme.selected : g_theme.border)
+        .onClick(std::move(onClick))
+        .transition(Motion())
+        .animate(core::AnimProperty::Color)
+        .build();
+
+    const float chip = std::min(Px(26.0f), h - Px(20.0f));
+    ui.rect(id + ".chipA")
+        .x(x + Px(12.0f)).y(y + (h - chip) * 0.5f).size(chip, chip)
+        .color(chipA).radius(Px(6.0f))
+        .border(1.0f, g_theme.border)
+        .build();
+    if (chipB.a > 0.0f) {
+        ui.rect(id + ".chipB")
+            .x(x + Px(12.0f) + chip * 0.55f).y(y + (h - chip) * 0.5f).size(chip * 0.7f, chip)
+            .color(chipB).radius(Px(6.0f))
+            .border(1.0f, g_theme.border)
+            .build();
+    }
+    ui.text(id + ".t")
+        .x(x + Px(12.0f) + chip * 1.5f).y(y).size(w - Px(24.0f) - chip * 1.5f, h)
+        .text(label)
+        .fontSize(Px(15.0f))
+        .lineHeight(Px(20.0f))
+        .color(g_theme.text)
+        .verticalAlign(core::VerticalAlign::Center)
+        .build();
+}
+
+// 热力方案按钮：三段色阶直接铺成一个小渐变条
+void HeatSwatchButton(core::dsl::Ui& ui, const std::string& id, float x, float y, float w, float h,
+                      const std::string& label, core::Color lo, core::Color mid, core::Color hi,
+                      bool selected, std::function<void()> onClick) {
+    const float r = Px(10.0f);
+    ui.rect(id + ".bg")
+        .x(x).y(y).size(w, h)
+        .states(g_theme.panel, g_theme.panelHi, g_theme.panelActive)
+        .radius(r)
+        .border(selected ? 2.0f : 1.0f, selected ? g_theme.selected : g_theme.border)
+        .onClick(std::move(onClick))
+        .transition(Motion())
+        .animate(core::AnimProperty::Color)
+        .build();
+
+    const float barW = w - Px(24.0f);
+    const float barH = Px(12.0f);
+    const float barY = y + Px(12.0f);
+    const core::Color stops[3] = {lo, mid, hi};
+    const int seg = 24;
+    for (int i = 0; i < seg; ++i) {
+        const double t0 = (double)i / seg, t1 = (double)(i + 1) / seg;
+        const core::Color c = HeatRampColor(stops[0], stops[1], stops[2], (t0 + t1) * 0.5);
+        ui.rect(id + ".seg" + std::to_string(i))
+            .x(x + Px(12.0f) + barW * (float)t0).y(barY)
+            .size(barW / seg + 1.0f, barH)
+            .color(c)
+            .radius(i == 0 || i == seg - 1 ? Px(5.0f) : 0.0f)
+            .build();
+    }
+    ui.text(id + ".t")
+        .x(x + Px(12.0f)).y(barY + barH + Px(4.0f)).size(barW, h - barH - Px(16.0f))
+        .text(label)
+        .fontSize(Px(13.0f))
+        .lineHeight(Px(18.0f))
+        .color(g_theme.textMut)
+        .build();
+}
+
+} // namespace
+
+void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen) {
+    const auto tk = CurrentTheme();
+    const auto& m = tk.metrics;
+    const float x = Px(28.0f), y = ContentTop();
+    const float w = std::min(screen.width - Px(56.0f), Px(760.0f));
+    const float viewH = std::max(Px(120.0f), screen.height - y - Px(24.0f));
+    const float gapY = Px(kPanelGap);
+
+    const float palH  = Px(kPalettePanelH);
+    const float heatH = Px(kHeatPanelH);
+    const float custH = Px(kCustomPanelH);
+    const float contentH = palH + gapY + heatH + gapY + custH;
+
+    const float pad = Px(24.0f);
+    const float cellGap = Px(10.0f);
+    auto panelBg = [&](const char* id, float py, float ph) {
+        ui.rect(id)
+            .x(0.0f).y(py).size(w, ph)
+            .color(tk.surface)
+            .radius(m.radius.section)
+            .border(1.0f, g_theme.border)
+            .shadow(components::theme::shadow(tk, 18.0f, 4.0f, 0.20f, 0.10f))
+            .build();
+    };
+    auto heading = [&](const char* id, float py, const char* text, const char* sub) {
+        ui.text(id)
+            .x(pad).y(py + Px(14.0f)).size(w - pad * 2.0f, Px(26.0f))
+            .text(text)
+            .fontSize(m.typography.title)
+            .lineHeight(m.typography.title + m.typography.lineGap)
+            .color(g_theme.text)
+            .build();
+        if (sub != nullptr) {
+            ui.text(std::string(id) + ".sub")
+                .x(pad).y(py + Px(42.0f)).size(w - pad * 2.0f, Px(22.0f))
+                .text(sub)
+                .fontSize(m.typography.caption)
+                .lineHeight(Px(20.0f))
+                .color(g_theme.textMut)
+                .build();
+        }
+    };
+
+    components::scrollView(ui, "theme.scroll")
+        .position(x, y)
+        .size(w, viewH)
+        .gap(gapY)
+        .step(Px(52.0f))
+        .scrollbarWidth(0.0f)
+        .scrollbarGap(Px(16.0f))
+        .theme(tk)
+        .bind(s_themeScroll)
+        .content([&](core::dsl::Ui& su, float cw, float) {
+            su.stack("theme.canvas").size(cw, contentH).content([&] {
+                // ── 1. 配色方案 ──
+                panelBg("th.pal.panel", 0.0f, palH);
+                heading("th.pal.title", 0.0f, "配色方案",
+                        "整套界面配色。选中项会立即应用并记住。");
+
+                const int cols = 4;
+                const float cellW = (cw - pad * 2.0f - cellGap * (cols - 1)) / cols;
+                const float cellH = Px(52.0f);
+                const float gridTop = Px(74.0f);
+                const int total = PaletteCount();
+                for (int i = 0; i < total; ++i) {
+                    const int cx = i % cols, cy = i / cols;
+                    const float bx = pad + (cellW + cellGap) * cx;
+                    const float by = gridTop + (cellH + cellGap) * cy;
+                    core::Color chipA, chipB;
+                    if (i == PaletteCount() - 1) {
+                        chipA = CustomAccent();
+                        chipB = core::Color{0, 0, 0, 0};   // 自定义：只画一个主色片
+                    } else {
+                        PalettePreview(i, &chipA, &chipB);
+                    }
+                    SwatchButton(su, "th.pal." + std::to_string(i), bx, by, cellW, cellH,
+                                 Utf8(PaletteName(i)), chipA, chipB,
+                                 CurrentPalette() == i,
+                                 [i] { SetPalette(i); app::requestUpdate(); });
+                }
+
+                // ── 2. 热力渐变 ──
+                const float heatY = palH + gapY;
+                panelBg("th.heat.panel", heatY, heatH);
+                heading("th.heat.title", heatY, "热力渐变",
+                        "热力图键帽的着色序列，和配色方案独立。");
+                const int hcols = 4;
+                const float hw = (cw - pad * 2.0f - cellGap * (hcols - 1)) / hcols;
+                const float hh = Px(58.0f);
+                const float hgt = heatY + Px(74.0f);
+                const int htotal = HeatPaletteCount();
+                for (int i = 0; i < htotal; ++i) {
+                    const int cx = i % hcols, cy = i / hcols;
+                    core::Color lo, mid, hi;
+                    HeatPreviewOf(i, &lo, &mid, &hi);
+                    HeatSwatchButton(su, "th.heat." + std::to_string(i),
+                                     pad + (hw + cellGap) * cx, hgt + (hh + cellGap) * cy,
+                                     hw, hh, Utf8(HeatPaletteName(i)), lo, mid, hi,
+                                     CurrentHeatPalette() == i,
+                                     [i] { SetHeatPalette(i); app::requestUpdate(); });
+                }
+
+                // ── 3. 自定义 ──
+                const float custY = heatY + heatH + gapY;
+                panelBg("th.cust.panel", custY, custH);
+                heading("th.cust.title", custY, "自定义",
+                        "用一个主色推导整套配色；热力色取色环上的颜色，并启用平方根色阶。");
+
+                const float row1 = custY + Px(74.0f);
+                const float btnW = Px(150.0f), btnH = Px(40.0f);
+                MiniButton(su, "th.cust.accent", pad, row1, btnW, btnH, "选择主题色", false, [] {
+                    s_pickerTarget = "accent";
+                    app::requestUpdate();
+                });
+                su.rect("th.cust.accentprev")
+                    .x(pad + btnW + Px(12.0f)).y(row1 + Px(8.0f)).size(Px(24.0f), Px(24.0f))
+                    .color(CustomAccent()).radius(Px(6.0f))
+                    .border(1.0f, g_theme.border)
+                    .build();
+                su.text("th.cust.accentdesc")
+                    .x(pad + btnW + Px(46.0f)).y(row1 + Px(8.0f)).size(cw * 0.5f, Px(24.0f))
+                    .text("当前主题色 " + ColorToHex(CustomAccent()))
+                    .fontSize(m.typography.label)
+                    .lineHeight(Px(24.0f))
+                    .color(g_theme.textMut)
+                    .build();
+                // 自定义方案的深浅底
+                MiniButton(su, "th.cust.tone", pad + btnW + Px(220.0f), row1, Px(110.0f), btnH,
+                           s_customDark ? "深色底" : "浅色底", false, [] {
+                               s_customDark = !s_customDark;
+                               SetCustomAccent(CustomAccent(), s_customDark);
+                           });
+
+                const float row2 = row1 + Px(52.0f);
+                MiniButton(su, "th.cust.heat", pad, row2, btnW, btnH, "选择热力主色", false, [] {
+                    s_pickerTarget = "heat";
+                    app::requestUpdate();
+                });
+                su.rect("th.cust.heatprev")
+                    .x(pad + btnW + Px(12.0f)).y(row2 + Px(8.0f)).size(Px(24.0f), Px(24.0f))
+                    .color(CustomHeatBase()).radius(Px(6.0f))
+                    .border(1.0f, g_theme.border)
+                    .build();
+                su.text("th.cust.heatdesc")
+                    .x(pad + btnW + Px(46.0f)).y(row2 + Px(8.0f)).size(cw * 0.6f, Px(24.0f))
+                    .text(HeatIsCustom() ? "已启用自定义热力色（平方根色阶）"
+                                         : "当前为内置热力方案，点左侧按钮切换到自定义")
+                    .fontSize(m.typography.label)
+                    .lineHeight(Px(24.0f))
+                    .color(g_theme.textMut)
+                    .build();
+            })
+            .build();
+        })
+        .build();
+
+    // 自己画的滚动条（框架内置的在这套主题下不显示）
+    if (contentH > viewH) {
+        const float barW = Px(6.0f);
+        const float barX = x + w - barW;
+        const float maxOff = contentH - viewH;
+        const float thumbH = std::max(Px(48.0f), viewH * (viewH / contentH));
+        const float off = std::clamp(s_themeScroll.get(), 0.0f, maxOff);
+        const float thumbY = y + (viewH - thumbH) * (off / maxOff);
+        ui.rect("theme.scroll.track")
+            .x(barX).y(y).size(barW, viewH)
+            .color(components::theme::withOpacity(g_theme.border, 0.35f))
+            .radius(barW * 0.5f).build();
+        ui.rect("theme.scroll.thumb")
+            .x(barX).y(thumbY).size(barW, thumbH)
+            .color(components::theme::withOpacity(g_theme.textMut, 0.75f))
+            .radius(barW * 0.5f).build();
+    }
+
+    // 取色面板（框架组件，全屏遮罩 + 面板）
+    if (!s_pickerTarget.empty()) {
+        const bool forHeat = s_pickerTarget == "heat";
+        components::colorPicker(ui, "theme.picker")
+            .open(true)
+            .screen(screen.width, screen.height)
+            .size(Px(560.0f), Px(460.0f))
+            .value(forHeat ? CustomHeatBase() : CustomAccent())
+            .colors({Hex(0x2563EB), Hex(0x7C3AED), Hex(0xDB2777), Hex(0xDC2626),
+                     Hex(0xD97706), Hex(0x16A34A), Hex(0x0D9488), Hex(0x475569),
+                     Hex(0x0EA5E9), Hex(0x8B5CF6), Hex(0xF59E0B), Hex(0x10B981)})
+            .theme(tk)
+            .transition(Motion())
+            .zIndex(30)
+            .onChange([forHeat](core::Color c) {
+                if (forHeat) SetCustomHeatBase(c);
+                else SetCustomAccent(c, s_customDark);
+                app::requestUpdate();
+            })
+            .onOpenChange([](bool open) {
+                if (!open) { s_pickerTarget.clear(); app::requestUpdate(); }
+            })
+            .build();
+    }
+}
+
+// ────────────────────────── 关窗确认弹窗 ──────────────────────────
+
+void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
+    if (!g_closeDialogOpen) return;
+    const auto tk = CurrentTheme();
+    const auto& m = tk.metrics;
+
+    ui.rect("close.mask")
+        .size(screen.width, screen.height)
+        .color(core::Color{0.0f, 0.0f, 0.0f, 0.45f})
+        .zIndex(90)
+        .onClick([] { g_closeDialogOpen = false; app::requestUpdate(); })
+        .build();
+    const float dw = Px(500.0f), dh = Px(268.0f);
+    const float dx = (screen.width - dw) * 0.5f, dy = (screen.height - dh) * 0.5f;
+    ui.rect("close.dlg")
+        .x(dx).y(dy).size(dw, dh)
+        .color(tk.surface)
+        .radius(Px(14.0f))
+        .border(1.0f, g_theme.border)
+        .shadow(components::theme::shadow(tk, 28.0f, 8.0f, 0.28f, 0.16f))
+        .zIndex(91)
+        .build();
+    ui.text("close.title")
+        .x(dx + Px(26.0f)).y(dy + Px(22.0f)).size(dw - Px(52.0f), Px(34.0f))
+        .text("关闭窗口")
+        .fontSize(m.typography.title)
+        .lineHeight(m.typography.title + m.typography.lineGap)
+        .color(g_theme.text)
+        .zIndex(91)
+        .build();
+    ui.text("close.text")
+        .x(dx + Px(26.0f)).y(dy + Px(66.0f)).size(dw - Px(52.0f), Px(72.0f))
+        .text("最小化到托盘后，只保留按键记录程序继续后台运行，图形界面会完全停止渲染，"
+              "内存占用很小；需要看统计时点托盘图标的 Show 即可恢复。")
+        .fontSize(m.typography.body)
+        .lineHeight(Px(24.0f))
+        .color(g_theme.textMut)
+        .zIndex(91)
+        .build();
+
+    // 位置需要固定宽度的容器承载（组件自身无定位方法）
+    ui.stack("close.check.row")
+        .x(dx + Px(26.0f)).y(dy + Px(148.0f)).size(Px(280.0f), Px(34.0f))
+        .zIndex(91)
+        .content([&] {
+            components::checkbox(ui, "close.check")
+                .size(Px(280.0f), Px(34.0f))
+                .checked(g_closeDontAsk)
+                .text("不再提示，记住我的选择")
+                .fontSize(m.typography.label)
+                .theme(tk)
+                .transition(Motion())
+                .onChange([](bool v) { g_closeDontAsk = v; app::requestUpdate(); })
+                .build();
+        })
+        .build();
+
+    MiniButton(ui, "close.totray", dx + Px(26.0f), dy + dh - Px(64.0f),
+               Px(196.0f), Px(44.0f), "最小化到托盘", true,
+               [] { CloseDialogDecide(false); });
+    MiniButton(ui, "close.exit", dx + dw - Px(158.0f), dy + dh - Px(64.0f),
+               Px(132.0f), Px(44.0f), "退出程序", false,
+               [] { CloseDialogDecide(true); });
 }
 
 } // namespace app

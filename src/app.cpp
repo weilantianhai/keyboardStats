@@ -170,7 +170,66 @@ static bool    s_liveResizing = false;
 static const int kMinClientW = 1140;
 static const int kMinClientH = 640;
 
+static HWND MainWindowHandle();   // 定义在下面
+
+// ────────────────── 关闭行为（点 ×） ──────────────────
+// 框架默认是"关窗即静默隐藏到托盘"。这里改成可配置：询问 / 直接最小化 / 直接退出，
+// 询问时用应用内弹窗（和清除记录那套一致的观感）。
+
+bool g_closeDialogOpen = false;
+bool g_closeDontAsk = false;
+static bool s_closeAllowed = false;   // 本次已确认，放行给框架去隐藏
+
+int CurrentCloseAction() {
+    const std::string v = PrefGetValue(L"ui-close.txt", "mode", "ask");
+    if (v == "min") return kCloseToTray;
+    if (v == "exit") return kCloseExit;
+    return kCloseAsk;
+}
+
+void SetCloseAction(int mode) {
+    PrefSetValue(L"ui-close.txt", "mode",
+                 mode == kCloseToTray ? "min" : (mode == kCloseExit ? "exit" : "ask"));
+}
+
+void ExitAppNow() {
+    // ExitProcess 不跑 atexit 回调，所以这里手动做掉它该做的事
+    RemoveHook();
+    StorageFlushNow();
+    ExitProcess(0);
+}
+
+void CloseDialogDecide(bool exitApp) {
+    g_closeDialogOpen = false;
+    if (g_closeDontAsk) SetCloseAction(exitApp ? kCloseExit : kCloseToTray);
+    if (exitApp) ExitAppNow();
+    HWND main = MainWindowHandle();
+    if (main) {
+        s_closeAllowed = true;
+        PostMessageW(main, WM_CLOSE, 0, 0);   // 放行一次，交给框架隐藏到托盘
+    }
+    app::requestUpdate();
+}
+
 static LRESULT CALLBACK MinSizeWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_CLOSE && !s_closeAllowed) {
+        s_closeAllowed = false;
+        switch (CurrentCloseAction()) {
+            case kCloseToTray:
+                s_closeAllowed = true;
+                PostMessageW(h, WM_CLOSE, 0, 0);   // 重新投递，这次放行
+                return 0;
+            case kCloseExit:
+                ExitAppNow();
+                return 0;
+            default:
+                g_closeDialogOpen = true;          // 显示应用内确认弹窗
+                app::requestUpdate();
+                return 0;
+        }
+    }
+    if (msg == WM_CLOSE) s_closeAllowed = false;   // 用掉这次放行，下次还要重新判断
+
     if (msg == WM_GETMINMAXINFO && s_minTrack.x > 0) {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
         mmi->ptMinTrackSize.x = s_minTrack.x;
@@ -296,6 +355,12 @@ const DslAppConfig& dslAppConfig() {
         LoadFontPref();    // 字体缩放偏好（自动/自定义）
 
         g_startHidden = wcsstr(GetCommandLineW(), L"--background") != nullptr;
+
+        // 调试用：--page=N 直接打开指定页面（截图/排查时省得点）
+        if (const wchar_t* p = wcsstr(GetCommandLineW(), L"--page=")) {
+            const int n = _wtoi(p + 7);
+            if (n >= 0 && n <= 3) g_page = n;
+        }
         return true;
     }();
     (void)coreReady;
@@ -313,9 +378,9 @@ const DslAppConfig& dslAppConfig() {
         .onKeyEvent([](const eui::KeyEvent& e) {
             if (!e.isDown()) return;
             if (e.key == eui::InputKey::Left || e.key == eui::InputKey::PageUp) {
-                g_page = (g_page + 2) % 3; app::requestUpdate();
+                g_page = (g_page + 3) % 4; app::requestUpdate();
             } else if (e.key == eui::InputKey::Right || e.key == eui::InputKey::PageDown) {
-                g_page = (g_page + 1) % 3; app::requestUpdate();
+                g_page = (g_page + 1) % 4; app::requestUpdate();
             }
         });
     return config;
@@ -343,9 +408,12 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
                 DrawKeyList(ui, screen);
             } else if (g_page == 1) {
                 DrawHistPage(ui, screen);
-            } else {
+            } else if (g_page == 2) {
                 DrawSettingsPage(ui, screen);
+            } else {
+                DrawThemePage(ui, screen);
             }
+            DrawCloseDialog(ui, screen);   // 关窗确认：盖在所有页面之上
         })
         .build();
 }

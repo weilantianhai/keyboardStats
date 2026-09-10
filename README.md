@@ -1,106 +1,222 @@
 # KeyboardStats 键盘热力统计
 
-后台记录全系统键盘按键次数与按下时间戳，托盘常驻，打开图形页面查看 104 键热力图与按键直方图。C++17 + [EUI-NEO](https://github.com/sudoevolve/EUI-NEO) 声明式 UI 框架（GLFW + OpenGL 渲染，Dark Dashboard 主题，设计令牌来自 ui-ux-pro-max 数据密集仪表盘方案）。
+后台记录全系统键盘/鼠标按键次数与按下时间戳，托盘常驻；打开图形界面查看 104 键热力图、
+按键直方图，并可按时间段筛选。
+
+**C++17 + [EUI-NEO](https://github.com/sudoevolve/EUI-NEO) 声明式 UI 框架**（GLFW + OpenGL 渲染），
+单文件 exe、静态链接、无运行时 DLL 依赖、不做任何网络通信。
+
+---
+
+## 功能
+
+### 统计与展示
+
+- **热力图**：104 键 ANSI 布局按频次着色（灰=未用 → 热力色阶），键帽上显示次数；右侧 Top 10 排行
+- **直方图**：按时段自动聚合（今天→每小时，7/30 天→每天，全部→每月）
+- **时段切换**：`今天 / 7 天 / 30 天 / 全部` 分段切换，`自定义` 可选日期段
+- **按键筛选**：键盘 / 鼠标 / 全部 / 分开（左右分区）
+- 键盘翻页：`←` `→` `PgUp` `PgDn`
+
+### 托盘与关闭行为
+
+- 单击托盘图标 → 菜单里 `Show` 恢复窗口，`Exit` 真正退出
+- 点窗口 `×`：可配置为 **每次询问 / 直接最小化到托盘 / 直接退出**（记在 `ui-close.txt`）
+- 询问弹窗里勾选"不再提示"即记住选择
+- **最小化到托盘后只保留记录程序**：图形界面完全停止渲染（主循环转为等待事件），
+  CPU 占用降到 0，图形资源被框架释放
+
+> 内存实测（本机，125% 缩放）：**窗口显示约 145 MB，最小化到托盘约 130 MB**。
+> 省下来的是渲染相关的部分；剩下的主要是进程基线与 OpenGL 上下文/字形图集，它们随窗口存在而存在。
+> 要做到"极小"需要把记录功能拆成独立的无界面进程（见文末"后续可做"）。
+
+### 开机自启动
+
+设置页开关，写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（无需管理员）。
+注册的命令带 `--background`，**开机只拉起记录程序 + 托盘图标，不弹窗口**。
+
+### 主题系统（独立"主题"页）
+
+- **10 套内置配色**：深色、浅色、莫兰迪、赛博朋克、复古终端、森林、樱花、深海、日落、北欧极简
+- **6 套热力渐变**：经典 蓝→黄→红、岩浆、冰川、霓虹、灰度、光谱
+- **自定义主题色**：选一个主色 → 用 HSL 算法推导整套配色（背景/面板/描边/主次文本/选中色/互补强调色），
+  可切深色底或浅色底
+- **自定义热力色**：在取色器里选一个主色 → 生成三段色阶，并自动启用**平方根色阶**
+  （低频段差异被拉开，小基数也能看出层次）
+- 配色方案与热力方案**互相独立**，可自由组合
+
+---
 
 ## 构建
 
-需要 CMake + MinGW-w64 g++（本机 `D:\Program Files\mingw64`）：
+### 前置
+
+1. **CMake**（≥3.14）与 **MinGW-w64 g++**（本机在 `D:\Program Files\mingw64`，g++ 14.2）
+2. **EUI-NEO 框架**：`.vendor/` 不在版本控制里，需要先自行获取：
+
+   ```bash
+   mkdir -p .vendor
+   git clone --depth 1 https://github.com/sudoevolve/EUI-NEO.git .vendor/eui-neo
+   ```
+
+   > 框架自带 glfw / freetype / glad / zlib / libpng / md4c 与中文字体，构建期不联网。
+
+### 构建
 
 ```powershell
 .\build.ps1
 ```
 
-脚本封装 CMake Configure + Build（MinGW Makefiles，Release），产出 `build\KeyboardStats.exe`（静态链接，无运行时 DLL 依赖），并自动部署 `assets/` 到 exe 目录。
+脚本封装 CMake Configure + Build（MinGW Makefiles、Release），产出 `build\KeyboardStats.exe`
+并自动把 `assets/` 部署到 exe 同级。
 
-## 使用
+> `build.ps1` 里 CMake 与 mingw32-make 的路径是写死的，换机器需要改这两行。
 
-1. 双击 `KeyboardStats.exe` → 托盘出现图标，开始后台记录
-2. 单击托盘图标或右键菜单 → 打开主窗口；关闭窗口 = 隐藏到托盘
-3. 主窗口（1180x720，可随窗口缩放）：
-   - **`热力图 / 直方图`** 分段切换页面（也可用 ←/→ 方向键或 PgUp/PgDn 切换）
-   - **`今天 / 最近7天 / 最近30天 / 全部`** 分段切换统计时段
-   - **`自定义`**：展开两个日期选择器选择日期段，`应用` 生效
-   - 热力图页：104 键按频次着色（灰=未用 → 蓝 → 黄 → 红），键帽显示次数，右侧 Top 10 排行
-   - 直方图页：按时段聚合柱状图（今天→每小时，7/30 天→每天，全部→每月）
-4. 右键托盘图标 → 退出（真正退出；退出前自动落盘）
-5. 重复启动会提示"已在运行"（单实例互斥）
+### 运行
 
-开机自启动：注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（`AutostartSet`，无需管理员），可用测试程序验证。
+```bash
+build\KeyboardStats.exe                 # 正常启动，窗口打开
+build\KeyboardStats.exe --background    # 静默启动（自启动用），只在托盘
+build\KeyboardStats.exe --page=3        # 调试用：直接打开指定页面（0热力图 1直方图 2设置 3主题）
+```
+
+---
 
 ## 数据存储
 
-数据目录：`%APPDATA%\KeyboardStats`（可用环境变量 `KEYBOARDSTATS_DIR` 覆盖，测试与便携运行用）。
+### 位置
+
+**设置目录**：`%APPDATA%\KeyboardStats`（环境变量 `KEYBOARDSTATS_DIR` 可覆盖），偏好文件固定在这里。
+
+**数据文件夹**默认是 **`<exe 所在目录>\keyboardstats`**（不存在自动创建）。解析顺序：
+
+1. `ui-data.txt` 的 `dir=`（在设置页选过就听它的）
+2. 环境变量 `KEYBOARDSTATS_DIR`（测试/便携运行；设了就等于"整个程序的家目录"）
+3. `<exe 目录>\keyboardstats`
+4. 上面那条建不出来（例如程序装在 `Program Files`）→ 退回设置目录，保证程序仍可用
+
+> 从旧版本升级时，若新位置没有数据而旧的 `%APPDATA%\KeyboardStats` 有，会**拷贝**一份过去
+> （只拷贝、不移动、不删除），避免切换后看起来"统计变空了"。
+
+### 文件
 
 | 文件 | 说明 |
 |---|---|
 | `events-YYYYMM.jsonl` | 事件流，按月一个文件，**每行一条 JSON**：`{"k":65,"t":"2026-01-15T09:30:12.345"}`（k=虚拟键码 0–255，65=A；t=本地时间，毫秒精度） |
-| `counts.json` | 全时段每键累计计数（由事件流推导的缓存，30 秒节流重写） |
-| `ui-theme.txt` | 主题偏好：`mode=light\|dark` |
+| `ui-theme.txt` | 配色方案 / 热力方案 / 自定义色：`palette=`、`heat=`、`accent=`、`heatbase=`、`mode=` |
 | `ui-font.txt` | 字号偏好：`auto=0\|1`、`scale=1.25` |
 | `ui-layout.txt` | 版面偏好：`kb=`、`mouse=`、`split=` |
+| `ui-data.txt` | 数据位置：`dir=` 数据文件夹、`file=` 当前数据文件名（空 = 自动按月） |
+| `ui-close.txt` | 关窗行为：`mode=ask\|min\|exit` |
 
 内存缓冲批量落盘：每 5 秒或退出时写入，钩子回调不做任何磁盘 I/O。
+启动时由事件流重建内存按日聚合，它**是唯一数据真相源**（`counts.json` 已废弃）。
 
-**记录管理（设置页）**：导入记录（选择 `*.jsonl`，按 `t` 的月份归入对应月度文件并重建聚合）、
-导出 JSONL（原样事件，按时序）、导出 CSV（`time,keycode,keyname`，带 UTF-8 BOM）、
-打开数据目录、清除全部记录（两步确认弹窗）。鼠标与滚轮使用伪键码：左键 1、右键 2、
-中键 4、侧键 5/6，滚轮上/下/左/右 224/225/226/227。
+### 数据文件标记行
 
-**隐私**：数据只存在本机。events 日志记录"什么键 + 何时"，理论上可还原打字行为，请勿同步到云端。程序自身不做任何网络通信。
+每个数据文件第一行是标记行：
 
-## 验证状态（2026-09-10，EUI-NEO 重写版实测）
+```json
+{"format":"keyboardstats-data","version":1}
+```
 
-| 项目 | 结果 |
+新建文件、首次写入某月的按月文件、导出 JSONL 时都会自动带上。识别规则：
+
+| 情况 | 判定 |
 |---|---|
-| 构建链 | ✅ CMake + MinGW，单 exe 3.2 MB + assets |
-| 数据层回归 | ✅ test_query：total=703，37 非零键，空格=39 A=37 Z=9 G=24 |
-| 开机自启动注册表 | ✅ test_autostart：before=0 afterOn=1 afterOff=0 PASS |
-| 钩子捕获 → 5 秒落盘 | ✅ 发送 4 次按键 → 事件文件 24→28 行 |
-| 深色主题渲染 | ✅ 像素级抽样：背景 #0B0C10 / 面板 #141822 占比 58%，无白屏 |
-| 热力图着色 | ✅ 暖色键（蓝→黄→红梯度）+ 空闲键帽灰像素签名 |
-| 页签切换（热力图/直方图） | ✅ 点击触发 page onChange v=1，抓屏确认键帽消失、柱状图出现 |
-| 时段切换 | ✅ 4 次范围 onChange 触发 |
-| 关闭 → 托盘驻留 | ✅ WM_CLOSE 后进程存活、窗口隐藏 |
-| 键盘翻页（←/→/PgUp/PgDn） | ✅ onKeyEvent 处理器已注册 |
+| 第一行有标记行 | 数据文件 |
+| 无标记，但每一行都是可识别事件 | 数据文件（兼容旧版本导出） |
+| 其它（CSV、随便什么文本） | 不是数据文件，转入时拒绝并提示 |
+
+### 自选数据位置（设置页）
+
+- **数据文件夹** — `更改` 选任意文件夹（不存在自动创建），`默认` 回到 `<exe 目录>\keyboardstats`。
+  若当前数据文件夹里有数据文件，会先弹窗问 `取消 / 仅切换 / 一起移动`。
+  **切换前会做写入预检**（建临时文件再删）：目录建不出来或没有写权限（如 `C:\Program Files`、
+  `C:\Windows`）时**直接拒绝并说明原因，不做任何改动**；要求搬运却一个都没成功时也会中止切换。
+- **数据文件** — `新建` 创建 `data-YYYYMMDD-HHMMSS.jsonl`（带标记行）并切过去；
+  `选择` 把一个 `*.jsonl` **转移**进数据文件夹并切换（校验标记，非法文件会被拒）；
+  `自动` 恢复按月轮转。指定数据文件后，新记录全部追加到该文件，只读它。
+
+**记录管理**：转入文件、导出 JSONL（带标记，可直接再转入）、导出 CSV（`time,keycode,keyname`，UTF-8 BOM）、
+打开数据目录、清除全部记录（两步确认）。
+鼠标与滚轮使用伪键码：左键 1、右键 2、中键 4、侧键 5/6，滚轮上/下/左/右 224/225/226/227。
+
+> 自动模式下"清除全部记录"删除 `events-*.jsonl`；指定了数据文件时只清空内容并补回标记行。
+
+---
 
 ## 代码结构
 
 ```
-src/app.cpp            EUI-NEO 应用入口：运行状态、统计服务（500ms 定时刷新）、
-                       窗口最小尺寸、单实例、托盘、键盘导航
-src/theme.cpp          主题令牌（深/浅）、热度渐变、偏好文件读写
+src/app.cpp            应用入口：运行状态、统计服务（500ms 刷新）、窗口最小尺寸、
+                       单实例、关窗行为拦截、页面路由
+src/theme.cpp          配色方案（10 套）、热力方案（6 套）、自定义色推导、偏好持久化
 src/fontscale.cpp      字体/控件缩放策略（自动=跟随窗口宽度 / 自定义=设置页滑块），
                        量化 + 防抖，持久化到 ui-font.txt
-src/pages.cpp          页面绘制：头部、控制行、热力图页、Top 10 侧栏、直方图页、
-                       设置页、按键次数直方图（含悬浮提示）
+src/pages.cpp          页面绘制：头部、控制行、热力图页、Top 10、直方图页、设置页、
+                       主题页、按键次数直方图、关窗确认弹窗
 src/state.h            共享运行状态与 FetchStats 声明
+src/pref.h             偏好文件读写（header-only，不依赖框架，数据层也能用）
 src/ui_util.h          通用小工具（颜色/编码/格式化，header-only）
 src/win/autostart.cpp  开机自启动注册表逻辑
-src/hook.cpp           WH_KEYBOARD_LL 低级键盘钩子（只观察不拦截）
-src/storage.cpp        事件缓冲落盘、按日聚合、时段查询引擎
-src/layout.h           104 键 ANSI 布局表 + 键名映射
+src/win/filedialog.h   打开/保存/文件夹选择对话框（header-only）
+src/hook.cpp           WH_KEYBOARD_LL / WH_MOUSE_LL 低级钩子（只观察不拦截）
+src/storage.cpp        数据位置解析、事件缓冲落盘、按日聚合、时段查询、记录管理
+src/layout.h           104 键 ANSI 布局表 + 键名映射 + 鼠标伪键码
 src/timeutil.cpp       公历日期算法（Howard Hinnant）、时间格式化
 assets/icon.png        托盘/窗口图标
 build.ps1              CMake 一键构建
-tests/                 数据层与注册表逻辑的独立测试程序
+tests/                 数据层、注册表、记录管理、默认目录解析的独立测试程序
+plan/                  当初 UI 重写为 EUI-NEO 的方案存档
 ```
 
-## vendored 框架补丁（`.vendor/` 不受版本控制，升级框架时需重放）
+### vendored 框架补丁（`.vendor/` 不受版本控制，升级框架时需重放）
 
 1. `core/app/glfw_app_main.cpp` → `getDpiScale()`：由 framebuffer/window 比例推导缩放，
    避免 OS 报告的缩放与真实 framebuffer 不一致导致渲染与命中判定错位。
-2. `core/render/text.cpp` → 字形图集自愈：共享灰度图集只有一页且原实现无淘汰，字号持续
-   变化（设置页字体滑块 / 窗口宽度自适应）会把页面写满，之后新字形永久缺失、文字错乱。
-   现在写满时清空该页并递增“图集重置版本号”，`TextPrimitive::Impl::prepare()` 检测到版本
+2. `core/render/text.cpp` → 字形图集自愈：共享灰度图集只有一页且原实现无淘汰，字号持续变化
+   （设置页字体滑块 / 窗口宽度自适应）会把页面写满，之后新字形永久缺失、文字错乱。
+   现在写满时清空该页并递增"图集重置版本号"，`TextPrimitive::Impl::prepare()` 检测到版本
    变化即丢弃失效 UV 并重建字形。
-3. `components/datepicker.h` → 滚轮列按「格」累积，**两格推进一行**（普通滚轮一格仅累积进度，
-   第二格才走一行；高分辨率滚轮按 0.1 格/事件等比累积），避免原实现"每个事件走一行"在高分辨率
-   滚轮下飞快、而按像素阈值又慢到要滚七八格才动一行。
+3. `components/datepicker.h` → 滚轮列按「格」累积，**两格推进一行**，避免原实现"每个事件走一行"
+   在高分辨率滚轮下飞快、而按像素阈值又慢到要滚七八格才动一行。
 4. `core/app/glfw_app_main.cpp` → 拖动窗口边框时实时重绘：Windows 的模态缩放循环嵌套在
-   `glfwWaitEvents` 内，主循环无法出帧，原实现只在松手后更新。现在把「更新+渲染一帧」提取
-   为 `renderOnce` 并通过 `g_liveResizeRender` 暴露给 framebuffer-size / window-refresh
-   回调：回调发现 framebuffer 尺寸与上次渲染不同就立即出帧（重入保护、首帧保护、6ms 限频）。
-   同时 `src/app.cpp` 在 `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` 间冻结字号缩放，避免拖动过程中
-   每个中间宽度都触发全量字形重建。
+   `glfwWaitEvents` 内，主循环无法出帧。现在把「更新+渲染一帧」提取为 `renderOnce` 并通过
+   `g_liveResizeRender` 暴露给 framebuffer-size / window-refresh 回调（重入保护、首帧保护、
+   6ms 限频）。同时 `src/app.cpp` 在 `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` 间冻结字号缩放。
 
-旧纯 Win32/GDI 版本（`gui.cpp/main.cpp`）已被 EUI-NEO 版本取代并移除。
+---
+
+## 测试
+
+```powershell
+.\tests\run_tests.ps1
+```
+
+| 程序 | 覆盖 |
+|---|---|
+| `test_query` | 数据层回归：时段查询各模式的桶结构、每键计数 |
+| `test_autostart` | 注册表自启动开关往返 |
+| `test_records` | 标记识别 / 非法文件被拒 / 导出导入 / 新建 / 搬运 / 可写预检 / 切到无效文件夹被拒 |
+| `test_default_dir` | 默认数据文件夹解析（不调用 `StorageInit`，不碰偏好文件） |
+
+> `test_records` 结尾会 `StorageClearAll()`，因此**必须在隔离目录运行**：`run_tests.ps1` 会用
+> `KEYBOARDSTATS_DIR` 指向临时目录，并只从真实数据目录**复制**一份种子事件，绝不写真实数据。
+> 单独手动跑时请自己设好 `KEYBOARDSTATS_DIR`。
+
+---
+
+## 隐私
+
+数据只存在本机。events 日志记录"什么键 + 何时"，理论上可还原打字行为，**请勿同步到云端**。
+程序自身不做任何网络通信。
+
+---
+
+## 后续可做
+
+- **独立记录进程**：把钩子 + 存储拆成一个无界面小进程（预计内存降到个位数 MB），
+  图形界面按需启动、只读数据文件。这是真正做到"后台只留记录程序、内存极小"的方案。
+- 数据文件合并：搬运时若遇重名会生成 `xxx-1.jsonl`，同一月份可能分成多个文件
+  （统计会一起读，但看着不整齐）。

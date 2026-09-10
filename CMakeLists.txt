@@ -18,8 +18,8 @@ add_executable(KeyboardStats
 )
 eui_neo_configure_app(KeyboardStats)
 
-# 记录管理用到 Win32 文件对话框与 ShellExecute
-target_link_libraries(KeyboardStats PRIVATE comdlg32 shell32)
+# 记录管理用到 Win32 文件对话框、ShellExecute 与文件夹选择（SHBrowseForFolder/CoTaskMemFree）
+target_link_libraries(KeyboardStats PRIVATE comdlg32 shell32 ole32)
 
 # 部署运行资源（托盘/窗口图标按 exe 同级 assets\ 解析）
 add_custom_command(TARGET KeyboardStats POST_BUILD

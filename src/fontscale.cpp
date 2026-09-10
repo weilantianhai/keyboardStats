@@ -53,8 +53,6 @@ void RequestFontCustom(float value) {
     s_pendingSince = 0.0;
 }
 
-float PendingFontCustom() { return g_fontCustom; }
-
 void TickFontScale(double nowSec) {
     if (!s_persistPending) return;
     if (s_pendingSince == 0.0) { s_pendingSince = nowSec; return; }

@@ -5,9 +5,11 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <map>
+#include <string>
+#include <vector>
 
 namespace app {
 
@@ -16,47 +18,236 @@ bool g_lightMode = false;
 
 namespace {
 
-UiTheme DarkThemeTokens() {
+// ────────────────────────── 颜色工具 ──────────────────────────
+
+double Clamp01(double v) { return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v); }
+
+// HSL → RGB（h: 0..360, s/l: 0..1）。自定义主题整套配色都靠它推导。
+core::Color Hsl(double h, double s, double l, float a = 1.0f) {
+    h = std::fmod(std::fmod(h, 360.0) + 360.0, 360.0) / 360.0;
+    s = Clamp01(s);
+    l = Clamp01(l);
+    auto hue2rgb = [](double p, double q, double t) {
+        if (t < 0.0) t += 1.0;
+        if (t > 1.0) t -= 1.0;
+        if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
+        if (t < 1.0 / 2.0) return q;
+        if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+        return p;
+    };
+    double r, g, b;
+    if (s <= 0.0) {
+        r = g = b = l;
+    } else {
+        const double q = l < 0.5 ? l * (1.0 + s) : l + s - l * s;
+        const double p = 2.0 * l - q;
+        r = hue2rgb(p, q, h + 1.0 / 3.0);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1.0 / 3.0);
+    }
+    return {float(r), float(g), float(b), a};
+}
+
+void RgbToHsl(const core::Color& c, double* h, double* s, double* l) {
+    const double r = c.r, g = c.g, b = c.b;
+    const double mx = std::max({r, g, b}), mn = std::min({r, g, b});
+    *l = (mx + mn) * 0.5;
+    if (mx - mn < 1e-6) {
+        *h = 0.0;
+        *s = 0.0;
+        return;
+    }
+    const double d = mx - mn;
+    *s = *l > 0.5 ? d / (2.0 - mx - mn) : d / (mx + mn);
+    if (mx == r) *h = 60.0 * std::fmod((g - b) / d, 6.0);
+    else if (mx == g) *h = 60.0 * ((b - r) / d + 2.0);
+    else *h = 60.0 * ((r - g) / d + 4.0);
+    if (*h < 0.0) *h += 360.0;
+}
+
+// 用相对亮度选一个可读的前景色（简单版 WCAG：0.55 阈值）
+core::Color ReadableOn(const core::Color& bg) {
+    const double lum = 0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b;
+    return lum > 0.55 ? core::Color{0.09f, 0.10f, 0.13f, 1.0f}
+                      : core::Color{0.98f, 0.99f, 1.0f, 1.0f};
+}
+
+// ────────────────────────── 内置配色方案 ──────────────────────────
+
+struct PaletteDef {
+    const char* id;         // 持久化标识
+    const wchar_t* name;
+    bool dark;
+    unsigned bg, panel, panelHi, panelActive, text, textMut, border;
+    unsigned brand, selected, accent, idleKey, idleEdge;
+};
+
+// 方案里不写热力三色：热力色由独立的"热力方案"决定，两件事分开选。
+const PaletteDef kPalettes[] = {
+    // 0 深色（原有 Dark Dashboard）
+    {"dark", L"深色", true,
+     0x0B0C10, 0x141822, 0x1B2130, 0x232B3E, 0xE5E9F0, 0x8A93A6, 0x272D3B,
+     0x1E40AF, 0x2563EB, 0xD97706, 0x232A3A, 0x323A4E},
+    // 1 浅色
+    {"light", L"浅色", false,
+     0xF2F4F8, 0xFFFFFF, 0xEEF2F8, 0xE3EAF4, 0x1F2430, 0x5B6472, 0xD8DEE9,
+     0x1E40AF, 0x2563EB, 0xB45309, 0xE6EAF2, 0xC9D2E0},
+    // 2 莫兰迪（低饱和灰调，Nature Distilled 思路）
+    {"morandi", L"莫兰迪", false,
+     0xE8E4DE, 0xF5F2ED, 0xEDE9E2, 0xDFD9D0, 0x4A4640, 0x86807A, 0xD5CFC6,
+     0x8C9A93, 0x7C8C86, 0xB08968, 0xE3DED6, 0xCCC5BB},
+    // 3 赛博朋克（Retro Futurism：霓虹蓝/品红 + 深紫黑）
+    {"cyber", L"赛博朋克", true,
+     0x0D0A1A, 0x161230, 0x1E1840, 0x271F52, 0xE8E6FF, 0x9A93C4, 0x332A63,
+     0x0080FF, 0x00C2FF, 0xFF006E, 0x1C1740, 0x3A2F70},
+    // 4 复古终端（琥珀单色 CRT）
+    {"retro", L"复古终端", true,
+     0x12100B, 0x1C1810, 0x262017, 0x332A1C, 0xEBD9A8, 0xA08E63, 0x3D3320,
+     0xC08A2E, 0xE0A33C, 0x7FB069, 0x241E14, 0x453A24},
+    // 5 森林
+    {"forest", L"森林", true,
+     0x0C1512, 0x12201B, 0x182B23, 0x1F372C, 0xE3F0E8, 0x8AA79A, 0x27402F,
+     0x2E7D4F, 0x3FA96A, 0xC9A227, 0x1B2A22, 0x2C4536},
+    // 6 樱花
+    {"sakura", L"樱花", false,
+     0xFAF2F4, 0xFFFFFF, 0xF7EAEE, 0xF0DCE3, 0x3A2A31, 0x7A6570, 0xEBD3DA,
+     0xC2185B, 0xD94B7F, 0x6A7DB7, 0xF6E6EB, 0xE4CBD4},
+    // 7 深海
+    {"deepsea", L"深海", true,
+     0x061119, 0x0B1A26, 0x102434, 0x163044, 0xDCEDF5, 0x7E9AAC, 0x1D3547,
+     0x1B6B8C, 0x2E9BBF, 0xE0A458, 0x0F2130, 0x1B3547},
+    // 8 日落
+    {"sunset", L"日落", true,
+     0x1A1113, 0x251A1C, 0x312326, 0x3E2D30, 0xF6E7E1, 0xB2958E, 0x46322F,
+     0xB5482E, 0xE06A3F, 0xF0B457, 0x2C1F21, 0x48332F},
+    // 9 北欧极简
+    {"nordic", L"北欧极简", false,
+     0xEDEFF2, 0xFFFFFF, 0xE7EAEF, 0xDCE1E8, 0x2B3038, 0x646C78, 0xD3D8E0,
+     0x3E5C76, 0x4E7495, 0xB06A4A, 0xE4E8ED, 0xC8CFD8},
+};
+
+constexpr int kPaletteCount = (int)(sizeof(kPalettes) / sizeof(kPalettes[0]));
+constexpr int kCustomPalette = kPaletteCount;   // 最后一格是"自定义"
+
+// ────────────────────────── 内置热力方案 ──────────────────────────
+
+struct HeatDef {
+    const char* id;
+    const wchar_t* name;
+    unsigned lo, mid, hi;
+};
+
+const HeatDef kHeats[] = {
+    {"classic", L"经典 蓝→黄→红", 0x313695, 0xF0DC78, 0xB2182B},
+    {"magma",   L"岩浆 暗红→亮黄", 0x4A0C0C, 0xD1440E, 0xFFD84D},
+    {"ice",     L"冰川 深蓝→白",   0x123A63, 0x4FA8D8, 0xEAF6FF},
+    {"neon",    L"霓虹 紫→青",     0x5B21B6, 0xE0399B, 0x22D3EE},
+    {"mono",    L"灰度 墨→白",     0x2A2A2A, 0x8A8A8A, 0xF5F5F5},
+    {"spectrum",L"光谱 蓝→绿→红",  0x1D4ED8, 0x22C55E, 0xEF4444},
+};
+
+constexpr int kHeatCount = (int)(sizeof(kHeats) / sizeof(kHeats[0]));
+constexpr int kCustomHeat = kHeatCount;
+
+// ────────────────────────── 当前选择（内存态） ──────────────────────────
+
+int  g_palette = 0;
+int  g_heat = 0;
+bool g_heatCustom = false;
+core::Color g_customAccent{0.22f, 0.45f, 0.85f, 1.0f};
+bool g_customDark = true;
+core::Color g_customHeatBase{0.15f, 0.55f, 0.85f, 1.0f};
+
+std::wstring HexStr(const char* key, const wchar_t* file) {
+    return Widen(PrefGetValue(file, key, ""));
+}
+
+std::string ToHex(core::Color c) {
+    char buf[16];
+    snprintf(buf, sizeof buf, "%02X%02X%02X",
+             (unsigned)std::lround(Clamp01(c.r) * 255.0),
+             (unsigned)std::lround(Clamp01(c.g) * 255.0),
+             (unsigned)std::lround(Clamp01(c.b) * 255.0));
+    return buf;
+}
+
+bool ParseHex(const std::string& s, core::Color* out) {
+    if (s.size() != 6) return false;
+    unsigned v = 0;
+    for (char ch : s) {
+        v <<= 4;
+        if (ch >= '0' && ch <= '9') v |= (unsigned)(ch - '0');
+        else if (ch >= 'a' && ch <= 'f') v |= (unsigned)(ch - 'a' + 10);
+        else if (ch >= 'A' && ch <= 'F') v |= (unsigned)(ch - 'A' + 10);
+        else return false;
+    }
+    *out = Hex(v);
+    return true;
+}
+
+// ────────────────────────── 由一个主色推导整套配色 ──────────────────────────
+// 思路：主色决定色相 H；背景/面板只在 H 上做低饱和的深浅分级，
+// 强调色取 H+150° 互补位，保证在界面上跳得出来又不刺眼。
+
+UiTheme DeriveTheme(const core::Color& accent, bool dark) {
+    double h = 0, s = 0, l = 0;
+    RgbToHsl(accent, &h, &s, &l);
+    const double hs = std::clamp(s, 0.25, 0.95);      // 太低会灰成一团
+    const double comp = h + 150.0;
+
     UiTheme t;
-    t.bg         = Hex(0x0B0C10);
-    t.panel      = Hex(0x141822);
-    t.panelHi    = Hex(0x1B2130);
-    t.panelActive= Hex(0x232B3E);
-    t.text       = Hex(0xE5E9F0);   // 对比度 ~15:1
-    t.textMut    = Hex(0x8A93A6);
-    t.border     = Hex(0x272D3B);
-    t.brand      = Hex(0x1E40AF);
-    t.selected   = Hex(0x2563EB);   // 白字对比 4.5:1
-    t.accent     = Hex(0xD97706);
-    t.idleKey    = Hex(0x232A3A);
-    t.idleEdge   = Hex(0x323A4E);
-    t.heatLo     = Hex(0x313695);
-    t.heatMid    = Hex(0xF0DC78);
-    t.heatHi     = Hex(0xB2182B);
+    if (dark) {
+        t.bg          = Hsl(h, hs * 0.30, 0.055);
+        t.panel       = Hsl(h, hs * 0.34, 0.095);
+        t.panelHi     = Hsl(h, hs * 0.36, 0.135);
+        t.panelActive = Hsl(h, hs * 0.38, 0.175);
+        t.border      = Hsl(h, hs * 0.34, 0.215);
+        t.text        = Hsl(h, hs * 0.16, 0.930);
+        t.textMut     = Hsl(h, hs * 0.20, 0.620);
+        t.brand       = accent;
+        t.selected    = Hsl(h, hs, std::max(0.52, l));
+        t.accent      = Hsl(comp, hs * 0.80, 0.580);
+        t.idleKey     = Hsl(h, hs * 0.34, 0.150);
+        t.idleEdge    = Hsl(h, hs * 0.34, 0.245);
+    } else {
+        t.bg          = Hsl(h, hs * 0.22, 0.955);
+        t.panel       = Hsl(h, hs * 0.10, 0.995);
+        t.panelHi     = Hsl(h, hs * 0.20, 0.945);
+        t.panelActive = Hsl(h, hs * 0.26, 0.900);
+        t.border      = Hsl(h, hs * 0.24, 0.845);
+        t.text        = Hsl(h, hs * 0.30, 0.130);
+        t.textMut     = Hsl(h, hs * 0.16, 0.420);
+        t.brand       = accent;
+        t.selected    = Hsl(h, hs, std::min(0.44, l));
+        t.accent      = Hsl(comp, hs * 0.70, 0.400);
+        t.idleKey     = Hsl(h, hs * 0.20, 0.915);
+        t.idleEdge    = Hsl(h, hs * 0.24, 0.800);
+    }
     return t;
 }
 
-UiTheme LightThemeTokens() {
-    UiTheme t;
-    t.bg         = Hex(0xF2F4F8);
-    t.panel      = Hex(0xFFFFFF);
-    t.panelHi    = Hex(0xEEF2F8);
-    t.panelActive= Hex(0xE3EAF4);
-    t.text       = Hex(0x1F2430);   // 对比度 ~14:1
-    t.textMut    = Hex(0x5B6472);
-    t.border     = Hex(0xD8DEE9);
-    t.brand      = Hex(0x1E40AF);
-    t.selected   = Hex(0x2563EB);   // 白字对比 4.5:1
-    t.accent     = Hex(0xB45309);   // 深琥珀：浅底可读性更好
-    t.idleKey    = Hex(0xE6EAF2);
-    t.idleEdge   = Hex(0xC9D2E0);
-    t.heatLo     = Hex(0x313695);   // 热度梯度两套主题保持一致
-    t.heatMid    = Hex(0xF0DC78);
-    t.heatHi     = Hex(0xB2182B);
-    return t;
+// 自定义热力主色 → 三段色阶（低频段用主色暗部，高频段往亮/暖偏）
+void CustomHeatRamp(core::Color base, core::Color* lo, core::Color* mid, core::Color* hi) {
+    double h = 0, s = 0, l = 0;
+    RgbToHsl(base, &h, &s, &l);
+    const double hs = std::clamp(s, 0.35, 1.0);
+    *lo  = Hsl(h, hs * 0.85, 0.28);
+    *mid = Hsl(h, hs,       0.55);
+    *hi  = Hsl(h + 42.0, hs * 0.95, 0.72);
 }
 
-components::theme::ThemeColorTokens AppTheme() {
+core::Color HeatStop(int index) {
+    if (g_heat == kCustomHeat) {
+        core::Color lo, mid, hi;
+        CustomHeatRamp(g_customHeatBase, &lo, &mid, &hi);
+        return index == 0 ? lo : (index == 1 ? mid : hi);
+    }
+    const HeatDef& d = kHeats[std::clamp(g_heat, 0, kHeatCount - 1)];
+    return Hex(index == 0 ? d.lo : (index == 1 ? d.mid : d.hi));
+}
+
+// 把组件令牌套到当前 g_theme 上（原来叫 AppTheme）
+components::theme::ThemeColorTokens BuildComponentTheme() {
     auto t = g_lightMode ? components::theme::light() : components::theme::dark();
     t.background    = g_theme.bg;
     t.surface       = g_theme.panel;
@@ -90,110 +281,218 @@ components::theme::ThemeColorTokens AppTheme() {
 
 } // namespace
 
-std::wstring PrefFilePath(const wchar_t* name) {
-    wchar_t custom[MAX_PATH] = {};
-    if (GetEnvironmentVariableW(L"KEYBOARDSTATS_DIR", custom, MAX_PATH) > 0) {
-        return std::wstring(custom) + L"\\" + name;
+// ────────────────────────── 对外接口 ──────────────────────────
+
+int PaletteCount() { return kPaletteCount + 1; }
+
+const char* PaletteId(int index) {
+    if (index == kCustomPalette) return "custom";
+    return kPalettes[std::clamp(index, 0, kPaletteCount - 1)].id;
+}
+
+const wchar_t* PaletteName(int index) {
+    if (index == kCustomPalette) return L"自定义";
+    return kPalettes[std::clamp(index, 0, kPaletteCount - 1)].name;
+}
+
+int CurrentPalette() { return g_palette; }
+
+void ApplyPalette(int index, bool persist);
+
+void SetPalette(int index) { ApplyPalette(index, true); }
+
+void ApplyPalette(int index, bool persist) {
+    index = std::clamp(index, 0, kCustomPalette);
+    g_palette = index;
+    if (index == kCustomPalette) {
+        g_theme = DeriveTheme(g_customAccent, g_customDark);
+        g_lightMode = !g_customDark;
+    } else {
+        const PaletteDef& p = kPalettes[index];
+        g_lightMode = !p.dark;
+        g_theme.bg          = Hex(p.bg);
+        g_theme.panel       = Hex(p.panel);
+        g_theme.panelHi     = Hex(p.panelHi);
+        g_theme.panelActive = Hex(p.panelActive);
+        g_theme.text        = Hex(p.text);
+        g_theme.textMut     = Hex(p.textMut);
+        g_theme.border      = Hex(p.border);
+        g_theme.brand       = Hex(p.brand);
+        g_theme.selected    = Hex(p.selected);
+        g_theme.accent      = Hex(p.accent);
+        g_theme.idleKey     = Hex(p.idleKey);
+        g_theme.idleEdge    = Hex(p.idleEdge);
     }
-    wchar_t appdata[MAX_PATH] = {};
-    GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
-    return std::wstring(appdata) + L"\\KeyboardStats\\" + name;
+    // 热力三色独立于配色方案
+    g_theme.heatLo  = HeatStop(0);
+    g_theme.heatMid = HeatStop(1);
+    g_theme.heatHi  = HeatStop(2);
+
+    if (persist) {
+        PrefSetValue(L"ui-theme.txt", "palette", PaletteId(index));
+        PrefSetValue(L"ui-theme.txt", "mode", g_lightMode ? "light" : "dark");
+        PrefSetValue(L"ui-theme.txt", "heat",
+                     g_heatCustom ? "custom" : kHeats[g_heat].id);
+        PrefSetValue(L"ui-theme.txt", "accent", ToHex(g_customAccent).c_str());
+        PrefSetValue(L"ui-theme.txt", "accentdark", g_customDark ? "1" : "0");
+        PrefSetValue(L"ui-theme.txt", "heatbase", ToHex(g_customHeatBase).c_str());
+    }
 }
 
-std::string PrefGetValue(const wchar_t* file, const char* key, const char* fallback) {
-    FILE* f = _wfopen(PrefFilePath(file).c_str(), L"rb");
-    if (!f) return fallback;
-    std::string all;
-    char buf[512];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) all.append(buf, n);
-    fclose(f);
-
-    const std::string k = std::string(key) + "=";
-    size_t pos = all.find(k);
-    if (pos == std::string::npos) return fallback;
-    pos += k.size();
-    size_t end = all.find_first_of("\r\n", pos);
-    return all.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+void PalettePreview(int index, core::Color* bg, core::Color* accent) {
+    if (index == kCustomPalette) {
+        const UiTheme t = DeriveTheme(g_customAccent, g_customDark);
+        *bg = t.bg;
+        *accent = t.selected;
+        return;
+    }
+    const PaletteDef& p = kPalettes[std::clamp(index, 0, kPaletteCount - 1)];
+    *bg = Hex(p.panel);
+    *accent = Hex(p.selected);
 }
 
-void PrefSetValue(const wchar_t* file, const char* key, const char* value) {
-    const std::wstring path = PrefFilePath(file);
-    std::map<std::string, std::string> kv;
-    std::vector<std::string> order;
-    if (FILE* f = _wfopen(path.c_str(), L"rb")) {
-        std::string all;
-        char buf[512];
-        size_t n;
-        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) all.append(buf, n);
-        fclose(f);
-        size_t p = 0;
-        while (p < all.size()) {
-            size_t e = all.find_first_of("\r\n", p);
-            if (e == std::string::npos) e = all.size();
-            std::string line = all.substr(p, e - p);
-            p = e + 1;
-            size_t eq = line.find('=');
-            if (eq == std::string::npos) continue;
-            std::string k = line.substr(0, eq);
-            if (!kv.count(k)) order.push_back(k);
-            kv[k] = line.substr(eq + 1);
+void HeatPreviewOf(int index, core::Color* lo, core::Color* mid, core::Color* hi) {
+    if (index == kCustomHeat) {
+        CustomHeatRamp(g_customHeatBase, lo, mid, hi);
+        return;
+    }
+    const HeatDef& d = kHeats[std::clamp(index, 0, kHeatCount - 1)];
+    *lo = Hex(d.lo);
+    *mid = Hex(d.mid);
+    *hi = Hex(d.hi);
+}
+
+std::string ColorToHex(core::Color c) { return ToHex(c); }
+
+void SetCustomAccent(core::Color accent, bool dark) {
+    g_customAccent = accent;
+    g_customDark = dark;
+    ApplyPalette(kCustomPalette, true);
+    app::requestUpdate();
+}
+
+core::Color CustomAccent() { return g_customAccent; }
+bool CustomIsDark() { return g_customDark; }
+
+int HeatPaletteCount() { return kHeatCount + 1; }
+
+const char* HeatPaletteId(int index) {
+    if (index == kCustomHeat) return "custom";
+    return kHeats[std::clamp(index, 0, kHeatCount - 1)].id;
+}
+
+const wchar_t* HeatPaletteName(int index) {
+    if (index == kCustomHeat) return L"自定义（色环 + 平方根色阶）";
+    return kHeats[std::clamp(index, 0, kHeatCount - 1)].name;
+}
+
+int CurrentHeatPalette() { return g_heatCustom ? kCustomHeat : g_heat; }
+
+void SetHeatPalette(int index) {
+    index = std::clamp(index, 0, kCustomHeat);
+    g_heatCustom = (index == kCustomHeat);
+    g_heat = g_heatCustom ? 0 : index;
+    g_theme.heatLo  = HeatStop(0);
+    g_theme.heatMid = HeatStop(1);
+    g_theme.heatHi  = HeatStop(2);
+    PrefSetValue(L"ui-theme.txt", "heat", g_heatCustom ? "custom" : kHeats[g_heat].id);
+    PrefSetValue(L"ui-theme.txt", "heatbase", ToHex(g_customHeatBase).c_str());
+    app::requestUpdate();
+}
+
+void SetCustomHeatBase(core::Color base) {
+    g_customHeatBase = base;
+    g_heatCustom = true;
+    g_theme.heatLo  = HeatStop(0);
+    g_theme.heatMid = HeatStop(1);
+    g_theme.heatHi  = HeatStop(2);
+    PrefSetValue(L"ui-theme.txt", "heat", "custom");
+    PrefSetValue(L"ui-theme.txt", "heatbase", ToHex(g_customHeatBase).c_str());
+    app::requestUpdate();
+}
+
+core::Color CustomHeatBase() { return g_customHeatBase; }
+bool HeatIsCustom() { return g_heatCustom; }
+bool HeatUsesSqrtScale() { return g_heatCustom; }
+
+core::Color HeatRampColor(const core::Color& lo, const core::Color& mid, const core::Color& hi,
+                          double t) {
+    if (t <= 0.0) return g_theme.idleKey;
+    const core::Color stops[3] = {lo, mid, hi};
+    const double at[3] = {0.0, 0.5, 1.0};
+    for (int i = 0; i < 2; ++i) {
+        if (t <= at[i + 1]) {
+            const double k = (t - at[i]) / (at[i + 1] - at[i]);
+            auto lerp = [k](float a, float b) { return float(a + (b - a) * k); };
+            return {lerp(stops[i].r, stops[i + 1].r),
+                    lerp(stops[i].g, stops[i + 1].g),
+                    lerp(stops[i].b, stops[i + 1].b), 1.0f};
         }
     }
-    if (!kv.count(key)) order.push_back(key);
-    kv[key] = value;
-
-    FILE* f = _wfopen(path.c_str(), L"wb");
-    if (!f) return;
-    for (const std::string& k : order) fputs((k + "=" + kv[k] + "\n").c_str(), f);
-    fclose(f);
+    return hi;
 }
 
 core::Color HeatColor(double t) {
     if (t <= 0.0) return g_theme.idleKey;
-    struct Stop { double t; core::Color c; };
-    const Stop kStops[] = {{0.0, g_theme.heatLo}, {0.5, g_theme.heatMid}, {1.0, g_theme.heatHi}};
-    for (int i = 0; i < 2; ++i) {
-        if (t <= kStops[i + 1].t) {
-            double k = (t - kStops[i].t) / (kStops[i + 1].t - kStops[i].t);
-            auto lerp = [k](float a, float b) { return float(a + (b - a) * k); };
-            return {lerp(kStops[i].c.r, kStops[i + 1].c.r),
-                    lerp(kStops[i].c.g, kStops[i + 1].c.g),
-                    lerp(kStops[i].c.b, kStops[i + 1].c.b), 1.0f};
-        }
-    }
-    return g_theme.heatHi;
+    // 自定义热力方案用平方根色阶：低频段的差异被拉开，小基数也能看出层次
+    if (HeatUsesSqrtScale()) t = std::sqrt(std::clamp(t, 0.0, 1.0));
+    return HeatRampColor(g_theme.heatLo, g_theme.heatMid, g_theme.heatHi, t);
 }
 
-components::theme::ThemeColorTokens CurrentTheme() { return AppTheme(); }
+components::theme::ThemeColorTokens CurrentTheme() { return BuildComponentTheme(); }
+
+void ApplyTheme() { ApplyPalette(g_palette, false); }
 
 void LoadThemePref() {
-    std::string mode = PrefGetValue(L"ui-theme.txt", "mode", "");
-    if (!mode.empty()) {
-        g_lightMode = mode == "light";
-    } else if (FILE* f = _wfopen(PrefFilePath(L"ui-theme.txt").c_str(), L"rb")) {
-        // 旧格式（文件内容为裸的 light/dark）：兼容读取
-        char buf[16] = {};
-        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-        fclose(f);
-        buf[n] = 0;
-        g_lightMode = strstr(buf, "light") != nullptr;
-    } else {
-        // 无保存偏好：跟随系统（AppsUseLightTheme：1=浅色）
-        DWORD v = 0, size = sizeof(v);
-        if (RegGetValueW(HKEY_CURRENT_USER,
-                         L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                         L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &size) == ERROR_SUCCESS) {
-            g_lightMode = v == 1;
+    // 自定义色 / 自定义热力色先读，ApplyPalette 依赖它们
+    core::Color tmp;
+    if (ParseHex(PrefGetValue(L"ui-theme.txt", "accent", ""), &tmp)) g_customAccent = tmp;
+    if (ParseHex(PrefGetValue(L"ui-theme.txt", "heatbase", ""), &tmp)) g_customHeatBase = tmp;
+    g_customDark = PrefGetValue(L"ui-theme.txt", "accentdark", "1") != "0";
+
+    const std::string heat = PrefGetValue(L"ui-theme.txt", "heat", "classic");
+    g_heatCustom = (heat == "custom");
+    g_heat = 0;
+    for (int i = 0; i < kHeatCount; ++i)
+        if (heat == kHeats[i].id) { g_heat = i; g_heatCustom = false; break; }
+
+    const std::string palette = PrefGetValue(L"ui-theme.txt", "palette", "");
+    int index = -1;
+    for (int i = 0; i < kPaletteCount; ++i)
+        if (palette == kPalettes[i].id) { index = i; break; }
+    if (palette == "custom") index = kCustomPalette;
+
+    if (index < 0) {
+        // 没有 palette 偏好：兼容老的 mode=light|dark（含更老的裸文本格式）
+        std::string mode = PrefGetValue(L"ui-theme.txt", "mode", "");
+        bool light;
+        if (!mode.empty()) {
+            light = mode == "light";
+        } else if (FILE* f = _wfopen(PrefFilePath(L"ui-theme.txt").c_str(), L"rb")) {
+            char buf[16] = {};
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            fclose(f);
+            buf[n] = 0;
+            light = strstr(buf, "light") != nullptr;
+        } else {
+            // 无保存偏好：跟随系统（AppsUseLightTheme：1=浅色）
+            DWORD v = 0, size = sizeof(v);
+            light = false;
+            if (RegGetValueW(HKEY_CURRENT_USER,
+                             L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                             L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &size)
+                == ERROR_SUCCESS) {
+                light = v == 1;
+            }
         }
+        index = light ? 1 : 0;
     }
-    g_theme = g_lightMode ? LightThemeTokens() : DarkThemeTokens();
+    ApplyPalette(index, false);
 }
 
 void ToggleTheme() {
-    g_lightMode = !g_lightMode;
-    g_theme = g_lightMode ? LightThemeTokens() : DarkThemeTokens();
-    PrefSetValue(L"ui-theme.txt", "mode", g_lightMode ? "light" : "dark");
+    // 头部按钮用：在深色/浅色两个基础方案之间切
+    SetPalette(CurrentPalette() == 1 ? 0 : 1);
     app::requestUpdate();
 }
 

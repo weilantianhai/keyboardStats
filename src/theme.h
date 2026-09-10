@@ -1,8 +1,10 @@
 #pragma once
-// 主题令牌（深/浅两套，运行时可切换）+ 热度渐变 + 偏好持久化
-// 设计令牌源自 ui-ux-pro-max-skill 生成结果（Data-Dense Dashboard）
+// 主题令牌 + 多套配色方案 + 热力渐变方案 + 自定义主题色
+// 设计令牌源自 ui-ux-pro-max-skill 生成结果（Data-Dense Dashboard），
+// 配色方案参考其 styles.csv / colors.csv（Nature Distilled、Retro Futurism、Financial Dashboard 等）
 #include "eui_neo.h"
 #include "components/theme.h"
+#include "pref.h"
 
 #include <string>
 
@@ -21,21 +23,43 @@ struct UiTheme {
     core::Color accent;     // uiux Accent
     core::Color idleKey;    // 无按键键帽
     core::Color idleEdge;   // 无按键键帽描边
-    core::Color heatLo;     // 热度下限（蓝）
-    core::Color heatMid;    // 热度中点（黄）
-    core::Color heatHi;     // 热度上限（红）
+    core::Color heatLo;     // 热度下限
+    core::Color heatMid;    // 热度中点
+    core::Color heatHi;     // 热度上限
 };
 
 extern UiTheme g_theme;
-extern bool g_lightMode;
+extern bool g_lightMode;      // 当前方案是否为浅色系（决定组件令牌取 light/dark）
 
-// 数据目录下的 key=value 偏好文件读写（ui-theme.txt / ui-font.txt 共用）
-std::wstring PrefFilePath(const wchar_t* name);
-std::string  PrefGetValue(const wchar_t* file, const char* key, const char* fallback);
-void         PrefSetValue(const wchar_t* file, const char* key, const char* value);
+// ────────────────────────── 配色方案 ──────────────────────────
 
-// 热度渐变：0=未用（键帽灰），0..1 = 蓝 → 黄 → 红
-core::Color HeatColor(double t);
+int          PaletteCount();                    // 含"自定义"在内
+const char*  PaletteId(int index);              // 稳定标识（写进偏好，别用下标）
+const wchar_t* PaletteName(int index);
+int          CurrentPalette();
+void         SetPalette(int index);             // 应用并持久化
+
+// 用"一个主色 → 推导整套配色"的方式自定义（深浅由 baseDark 决定）
+void       SetCustomAccent(core::Color accent, bool dark);
+core::Color CustomAccent();
+bool        CustomIsDark();
+
+// ────────────────────────── 热力渐变方案 ──────────────────────────
+
+int          HeatPaletteCount();
+const char*  HeatPaletteId(int index);
+const wchar_t* HeatPaletteName(int index);
+int          CurrentHeatPalette();
+void         SetHeatPalette(int index);
+
+// 自定义热力主色：取色环上的一个颜色，配平方根色阶
+void         SetCustomHeatBase(core::Color base);
+core::Color  CustomHeatBase();
+bool         HeatIsCustom();
+bool         HeatUsesSqrtScale();               // 自定义方案用平方根色阶（低频段更易区分）
+
+// 依据当前全部偏好重算 g_theme + 组件令牌
+void ApplyTheme();
 
 // 组件主题（segmented/barChart/datePicker 等），随 g_lightMode 切换
 components::theme::ThemeColorTokens CurrentTheme();
@@ -45,8 +69,21 @@ inline core::Transition Motion() {
     return core::Transition::make(0.18f, core::Ease::OutCubic);
 }
 
-// 偏好持久化 + 系统默认跟随；ToggleTheme 供头部按钮调用
+// 热度渐变：0=未用（键帽灰），0..1 = 当前热力方案的三段色阶
+core::Color HeatColor(double t);
+
+// 旧接口保留：头部按钮/兼容用（等价于在深色/浅色之间切）
 void LoadThemePref();
 void ToggleTheme();
+
+// 色阶辅助（供自定义/预览用）
+core::Color HeatRampColor(const core::Color& lo, const core::Color& mid, const core::Color& hi, double t);
+
+// 选择界面用的预览：不切换当前主题，只取某方案的取景色
+void PalettePreview(int index, core::Color* bg, core::Color* accent);
+void HeatPreviewOf(int index, core::Color* lo, core::Color* mid, core::Color* hi);
+
+// #RRGGBB（大写）
+std::string ColorToHex(core::Color c);
 
 } // namespace app
