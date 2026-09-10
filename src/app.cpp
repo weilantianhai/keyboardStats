@@ -209,6 +209,7 @@ const DslAppConfig& dslAppConfig() {
 
 void compose(eui::Ui& ui, const eui::Screen& screen) {
     EnsureUiServices();
+    UpdateUiScale(screen.width);   // 字号/控件随窗口宽度缩放（须先于所有 Draw 调用）
 
     ui.stack("root")
         .size(screen.width, screen.height)

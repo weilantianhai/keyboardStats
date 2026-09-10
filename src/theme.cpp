@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -10,6 +11,12 @@ namespace app {
 
 UiTheme g_theme;
 bool g_lightMode = false;
+float g_uiScale = 1.0f;
+
+// 窄窗口回落、宽窗口放大（上限 1.25 保证控制行不溢出）；基准：1180 宽 → 1.25
+void UpdateUiScale(float width) {
+    g_uiScale = std::clamp(width / 944.0f, 0.88f, 1.25f);
+}
 
 namespace {
 
@@ -62,15 +69,26 @@ components::theme::ThemeColorTokens AppTheme() {
     t.text          = g_theme.text;
     t.border        = g_theme.border;
     t.primary       = g_theme.selected;
-    // 整体字号调大：分段控件/柱状图/日期选择器等组件统一放大
-    t.metrics.typography.caption  += 4.0f;
-    t.metrics.typography.label    += 4.0f;
-    t.metrics.typography.body     += 4.0f;
-    t.metrics.typography.title    += 4.0f;
-    t.metrics.typography.display  += 4.0f;
-    t.metrics.typography.subtitle += 4.0f;
-    t.metrics.typography.input    += 4.0f;
-    t.metrics.typography.hint     += 4.0f;
+    // 整体字号放大后再按窗口宽度缩放；control/spacing 只轻微缩放，
+    // 避免超过框架 barChart 内硬编码的绘图区偏移（plotY=70 / h-112）
+    const float ts = g_uiScale;
+    const float ls = std::min(g_uiScale, 1.15f);
+    t.metrics.typography.caption  = (t.metrics.typography.caption  + 4.0f) * ts;
+    t.metrics.typography.label    = (t.metrics.typography.label    + 4.0f) * ts;
+    t.metrics.typography.body     = (t.metrics.typography.body     + 4.0f) * ts;
+    t.metrics.typography.title    = (t.metrics.typography.title    + 4.0f) * ts;
+    t.metrics.typography.display  = (t.metrics.typography.display  + 4.0f) * ts;
+    t.metrics.typography.subtitle = (t.metrics.typography.subtitle + 4.0f) * ts;
+    t.metrics.typography.input    = (t.metrics.typography.input    + 4.0f) * ts;
+    t.metrics.typography.hint     = (t.metrics.typography.hint     + 4.0f) * ts;
+    t.metrics.typography.control *= ls;
+    t.metrics.typography.lineGap *= ls;
+    t.metrics.control.compact    *= ls;
+    t.metrics.control.menuItem   *= ls;
+    t.metrics.control.indicator  *= ls;
+    t.metrics.spacing.large      *= ls;
+    t.metrics.spacing.section    *= ls;
+    t.metrics.spacing.compact    *= ls;
     return t;
 }
 

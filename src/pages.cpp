@@ -20,6 +20,13 @@ bool s_top10Open = true;
 
 // ────────────────── UI 小构件 ──────────────────
 
+// 布局辅助：所有固定尺寸乘以窗口缩放因子，字号与留白同步变化
+inline float Px(float v) { return v * g_uiScale; }
+
+// 控制行 Y（副标题下方）与页面内容起始 Y（控制行下方）
+inline float ControlsY() { return Px(58.0f) + Px(28.0f) + 6.0f; }
+inline float ContentTop() { return ControlsY() + Px(34.0f) + Px(14.0f); }
+
 void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
                 float w, float h, const std::string& label, bool accent,
                 std::function<void()> onClick) {
@@ -29,7 +36,7 @@ void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
     ui.rect(id + ".bg")
         .x(x).y(y).size(w, h)
         .states(base, hover, press)
-        .radius(8.0f)
+        .radius(Px(8.0f))
         .border(1.0f, accent ? core::Color{0, 0, 0, 0} : g_theme.border)
         .onClick(std::move(onClick))
         .transition(Motion())
@@ -38,8 +45,8 @@ void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
     ui.text(id + ".t")
         .x(x).y(y).size(w, h)
         .text(label)
-        .fontSize(17.0f)
-        .lineHeight(20.0f)
+        .fontSize(Px(17.0f))
+        .lineHeight(Px(20.0f))
         .color(accent ? Hex(0xFFFFFF) : g_theme.text)
         .horizontalAlign(core::HorizontalAlign::Center)
         .verticalAlign(core::VerticalAlign::Center)
@@ -82,29 +89,32 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
 
 void DrawHeader(core::dsl::Ui& ui, float w) {
     ui.text("hd.title")
-        .x(28.0f).y(12.0f).size(w - 200.0f, 46.0f)
+        .x(Px(28.0f)).y(Px(12.0f)).size(w - Px(200.0f), Px(46.0f))
         .text("KeyboardStats 键盘热力统计")
-        .fontSize(34.0f).lineHeight(40.0f)
+        .fontSize(Px(34.0f)).lineHeight(Px(40.0f))
         .color(g_theme.text)
         .build();
     std::string sub = "共 " + WithCommas(g_stats.total) + " 次按键 · " + g_rangeText;
     ui.text("hd.sub")
-        .x(28.0f).y(62.0f).size(w - 200.0f, 28.0f)
+        .x(Px(28.0f)).y(Px(58.0f)).size(w - Px(200.0f), Px(28.0f))
         .text(sub)
-        .fontSize(19.0f).lineHeight(26.0f)
+        .fontSize(Px(19.0f)).lineHeight(Px(26.0f))
         .color(g_theme.textMut)
         .build();
-    MiniButton(ui, "hd.top10", w - 232.0f, 22.0f, 100.0f, 34.0f,
+    const float bh = Px(34.0f), by = Px(22.0f);
+    MiniButton(ui, "hd.top10", w - 306.0f, by, 160.0f, bh,
                s_top10Open ? "隐藏 Top 10" : "显示 Top 10", false,
                [] { s_top10Open = !s_top10Open; app::requestUpdate(); });
-    MiniButton(ui, "hd.theme", w - 122.0f, 22.0f, 94.0f, 34.0f,
+    MiniButton(ui, "hd.theme", w - 136.0f, by, 108.0f, bh,
                g_lightMode ? "深色模式" : "浅色模式", false, ToggleTheme);
 }
 
 void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
-    const float y = 96.0f, h = 34.0f;
+    const float y = ControlsY();
+    const float h = Px(34.0f);
 
     // segmented 组件自身无定位方法，用带位置的 stack 容器承载
+    // 横向位置/宽度不随缩放变化（受窗口宽度约束），只缩放高度
     ui.stack("ctrl.page")
         .x(28.0f).y(y).size(200.0f, h)
         .content([&] {
@@ -120,10 +130,10 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 
     ui.stack("ctrl.range")
-        .x(248.0f).y(y).size(420.0f, h)
+        .x(248.0f).y(y).size(470.0f, h)
         .content([&] {
             components::segmented(ui, "seg.range")
-                .size(420.0f, h)
+                .size(470.0f, h)
                 .items({"今天", "最近 7 天", "最近 30 天", "全部"})
                 .selected(g_rangeMode <= 3 ? g_rangeMode : 3)
                 .theme(CurrentTheme())
@@ -136,16 +146,18 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
     uint32_t today = TodayLocal();
     if (!g_pendingFrom) g_pendingFrom = AddDays(today, -6);
     if (!g_pendingTo) g_pendingTo = today;
+    // 只显示月-日：控件行横向空间有限（日期选择器内仍显示完整日期）
     auto ymdStr = [](uint32_t ymd) {
         if (!ymd) return std::string("选择日期");
-        return Utf8(YmdToStr(ymd));
+        std::string s = Utf8(YmdToStr(ymd));
+        return s.size() >= 10 ? s.substr(5) : s;
     };
 
-    MiniButton(ui, "btn.from", 690.0f, y, 100.0f, h, "从 " + ymdStr(g_pendingFrom),
+    MiniButton(ui, "btn.from", 726.0f, y, 96.0f, h, "从 " + ymdStr(g_pendingFrom),
                false, [] { g_fromOpen.set(!g_fromOpen.get()); });
-    MiniButton(ui, "btn.to", 798.0f, y, 100.0f, h, "至 " + ymdStr(g_pendingTo),
+    MiniButton(ui, "btn.to", 830.0f, y, 96.0f, h, "至 " + ymdStr(g_pendingTo),
                false, [] { g_toOpen.set(!g_toOpen.get()); });
-    MiniButton(ui, "btn.apply", 906.0f, y, 76.0f, h, "应用", true, [] {
+    MiniButton(ui, "btn.apply", 934.0f, y, 76.0f, h, "应用", true, [] {
         if (g_pendingFrom && g_pendingTo) {
             g_customFrom = g_pendingFrom;
             g_customTo = g_pendingTo;
@@ -174,24 +186,24 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
 }
 
 void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
-    const float top = 148.0f;
-    // Top 10 侧栏开启且窗口足够宽时右侧预留 250px；窄窗口自动隐藏侧栏
+    const float top = ContentTop();
+    // Top 10 侧栏开启且窗口足够宽时右侧预留；窄窗口自动隐藏侧栏
     const bool rail = s_top10Open && screen.width >= 1000.0f;
-    const float railW = rail ? 250.0f : 0.0f;
-    const float availW = screen.width - railW - 56.0f;
-    const float availH = screen.height - top - 70.0f;
+    const float railW = rail ? Px(250.0f) : 0.0f;
+    const float availW = screen.width - railW - Px(56.0f);
+    const float availH = screen.height - top - Px(70.0f);
     float u = std::min(availW / 24.0f, availH / 6.0f);
     u = std::clamp(u, 24.0f, 80.0f);   // 随窗口缩放，仅保留可用性下限
     const float kx = (screen.width - railW - u * 24.0f) * 0.5f;
-    const float ky = top + 12.0f;
+    const float ky = top + Px(12.0f);
     const float gap = 2.0f;
 
     // 键盘面板底
     ui.rect("heat.panel")
-        .x(kx - 14.0f).y(ky - 14.0f)
-        .size(u * 24.0f + 28.0f, u * 6.0f + 28.0f)
+        .x(kx - Px(14.0f)).y(ky - Px(14.0f))
+        .size(u * 24.0f + Px(28.0f), u * 6.0f + Px(28.0f))
         .color(g_theme.panel)
-        .radius(12.0f)
+        .radius(Px(12.0f))
         .border(1.0f, g_theme.border)
         .build();
 
@@ -206,24 +218,24 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     }
 
     // 图例：8 段渐变
-    const float ly = ky + u * 6.0f + 22.0f;
-    const float lx = kx + u * 24.0f - 8.0f * 22.0f - 46.0f;
+    const float ly = ky + u * 6.0f + Px(22.0f);
+    const float lx = kx + u * 24.0f - 8.0f * Px(22.0f) - Px(46.0f);
     ui.text("legend.lo")
-        .x(lx - 34.0f).y(ly - 4.0f).size(32.0f, 20.0f)
-        .text("少").fontSize(16.0f).lineHeight(20.0f)
+        .x(lx - Px(34.0f)).y(ly - Px(4.0f)).size(Px(32.0f), Px(20.0f))
+        .text("少").fontSize(Px(16.0f)).lineHeight(Px(20.0f))
         .color(g_theme.textMut).horizontalAlign(core::HorizontalAlign::Right)
         .build();
     for (int i = 0; i < 8; ++i) {
         ui.rect("legend.sw." + std::to_string(i))
-            .x(lx + i * 22.0f).y(ly)
-            .size(20.0f, 12.0f)
+            .x(lx + i * Px(22.0f)).y(ly)
+            .size(Px(20.0f), Px(12.0f))
             .color(HeatColor((i + 0.5) / 8.0))
             .radius(3.0f)
             .build();
     }
     ui.text("legend.hi")
-        .x(lx + 8 * 22.0f + 4.0f).y(ly - 4.0f).size(26.0f, 20.0f)
-        .text("多").fontSize(16.0f).lineHeight(20.0f)
+        .x(lx + 8 * Px(22.0f) + Px(4.0f)).y(ly - Px(4.0f)).size(Px(26.0f), Px(20.0f))
+        .text("多").fontSize(Px(16.0f)).lineHeight(Px(20.0f))
         .color(g_theme.textMut)
         .build();
 }
@@ -232,28 +244,28 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
 void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
     if (!(s_top10Open && screen.width >= 1000.0f)) return;
 
-    const float x = screen.width - 250.0f;
-    const float y = 148.0f;
-    const float w = 226.0f;
-    const float h = screen.height - y - 24.0f;
+    const float x = screen.width - Px(250.0f);
+    const float y = ContentTop();
+    const float w = Px(226.0f);
+    const float h = screen.height - y - Px(24.0f);
 
     ui.rect("top.panel")
         .x(x).y(y).size(w, h)
         .color(g_theme.panel)
-        .radius(12.0f)
+        .radius(Px(12.0f))
         .border(1.0f, g_theme.border)
         .build();
     ui.text("top.title")
-        .x(x + 16.0f).y(y + 14.0f).size(w - 96.0f, 26.0f)
+        .x(x + Px(16.0f)).y(y + Px(14.0f)).size(w - Px(96.0f), Px(26.0f))
         .text("Top 10")
-        .fontSize(20.0f).lineHeight(24.0f)
+        .fontSize(Px(20.0f)).lineHeight(Px(24.0f))
         .color(g_theme.text)
         .build();
-    MiniButton(ui, "top.collapse", x + w - 76.0f, y + 10.0f, 60.0f, 30.0f,
+    MiniButton(ui, "top.collapse", x + w - Px(76.0f), y + Px(10.0f), Px(60.0f), Px(30.0f),
                "收起", false, [] { s_top10Open = false; app::requestUpdate(); });
 
-    float rowY = y + 50.0f;
-    const float rowH = std::min(34.0f, (h - 64.0f) / 10.0f);
+    float rowY = y + Px(50.0f);
+    const float rowH = std::min(Px(34.0f), (h - Px(64.0f)) / 10.0f);
     const int n = (int)g_keyHist.size();
     const int start = std::max(0, n - 10);
     int rank = n - start;   // 升序数组的末尾即最大值，倒序输出
@@ -261,40 +273,40 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
         const TopEntry& e = g_keyHist[(size_t)i];
         std::string id = "top.row." + std::to_string(rank);
         ui.text(id + ".name")
-            .x(x + 16.0f).y(rowY).size(w * 0.55f, rowH)
+            .x(x + Px(16.0f)).y(rowY).size(w * 0.55f, rowH)
             .text(std::to_string(rank) + ". " + e.name)
-            .fontSize(17.0f).lineHeight(rowH)
+            .fontSize(Px(17.0f)).lineHeight(rowH)
             .color(g_theme.text)
             .build();
         ui.text(id + ".count")
-            .x(x + w * 0.55f).y(rowY).size(w - w * 0.55f - 16.0f, rowH)
+            .x(x + w * 0.55f).y(rowY).size(w - w * 0.55f - Px(16.0f), rowH)
             .text(WithCommas(e.count))
-            .fontSize(17.0f).lineHeight(rowH)
+            .fontSize(Px(17.0f)).lineHeight(rowH)
             .color(g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Right)
             .build();
         ui.rect(id + ".bar.bg")
-            .x(x + 16.0f).y(rowY + rowH - 4.0f)
-            .size(w - 32.0f, 2.0f)
+            .x(x + Px(16.0f)).y(rowY + rowH - Px(4.0f))
+            .size(w - Px(32.0f), 2.0f)
             .color(g_theme.idleEdge)
             .radius(1.0f)
             .build();
         ui.rect(id + ".bar")
-            .x(x + 16.0f).y(rowY + rowH - 4.0f)
-            .size((w - 32.0f) * e.frac, 2.0f)
+            .x(x + Px(16.0f)).y(rowY + rowH - Px(4.0f))
+            .size((w - Px(32.0f)) * e.frac, 2.0f)
             .color(g_theme.selected)
             .radius(1.0f)
             .transition(Motion())
             .animate(core::AnimProperty::Frame)
             .build();
-        rowY += rowH + 4.0f;
+        rowY += rowH + Px(4.0f);
         --rank;
     }
     if (g_keyHist.empty()) {
         ui.text("top.empty")
-            .x(x + 16.0f).y(rowY).size(w - 32.0f, 24.0f)
+            .x(x + Px(16.0f)).y(rowY).size(w - Px(32.0f), Px(24.0f))
             .text("暂无数据，去打几个字吧")
-            .fontSize(14.0f).lineHeight(20.0f)
+            .fontSize(Px(14.0f)).lineHeight(Px(20.0f))
             .color(g_theme.textMut)
             .build();
     }
@@ -423,13 +435,13 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
 }
 
 void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen) {
-    const float x = 28.0f, y = 148.0f;
-    const float w = screen.width - 56.0f;
-    const float totalH = screen.height - y - 24.0f;
+    const float x = Px(28.0f), y = ContentTop();
+    const float w = screen.width - Px(56.0f);
+    const float totalH = screen.height - y - Px(24.0f);
     // 上：时间直方图（约 52%），下：按键使用次数直方图
     const float topH = totalH * 0.52f;
-    const float histY = y + topH + 10.0f;
-    const float histH = totalH - topH - 10.0f;
+    const float histY = y + topH + Px(10.0f);
+    const float histH = totalH - topH - Px(10.0f);
 
     // 必须用定位 stack 包裹：barChart 构建器没有定位方法，
     // 直接 build 会从 (0,0) 画起并盖住顶部的页签控制行。
