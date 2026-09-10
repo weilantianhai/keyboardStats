@@ -10,6 +10,7 @@
 #include "state.h"
 #include "pages.h"
 #include "ui_util.h"
+#include "fontscale.h"
 
 #include <windows.h>
 
@@ -40,6 +41,10 @@ eui::Signal<bool> g_toOpen{false};
 static bool g_startHidden = false;
 static bool g_uiServicesReady = false;
 static UINT_PTR g_timerId = 0;
+
+// 窗口最小尺寸：启动阶段的重试计数与执行函数（实现见文件后部）
+static int  s_enforceLeft = 20;   // 最多尝试次数（500ms/次）
+static void EnforceMinSizeOnce();
 
 // ────────────────── 数据获取与节流刷新 ──────────────────
 
@@ -120,6 +125,8 @@ static bool StatsDiffer(const RangeStats& a, const RangeStats& b) {
 static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     StorageFlushIfDue();
 
+    if (s_enforceLeft > 0) { --s_enforceLeft; EnforceMinSizeOnce(); }
+
     RangeStats fresh = QueryRange(g_rangeMode, g_customFrom, g_customTo);   // 粗比较即可
     if (StatsDiffer(fresh, g_stats)) {
         FetchStats();
@@ -127,9 +134,81 @@ static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     }
 }
 
+// ────────────────── 窗口最小尺寸（Win32 子类化拦截 WM_GETMINMAXINFO） ──────────────────
+
+static WNDPROC s_origWndProc = nullptr;
+static POINT   s_minTrack = {0, 0};
+
+// 布局能容纳的最小客户区（控制行为固定宽度，小于此值会重叠/溢出）
+static const int kMinClientW = 1140;
+static const int kMinClientH = 640;
+
+static LRESULT CALLBACK MinSizeWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_GETMINMAXINFO && s_minTrack.x > 0) {
+        auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
+        mmi->ptMinTrackSize.x = s_minTrack.x;
+        mmi->ptMinTrackSize.y = s_minTrack.y;
+        return 0;
+    }
+    return CallWindowProcW(s_origWndProc, h, msg, wp, lp);
+}
+
+// 本进程第一个带标题的可见顶层窗口（GLFW 主窗口；框架未暴露句柄）
+static HWND MainWindowHandle() {
+    struct Ctx { HWND found; } ctx{nullptr};
+    EnumWindows([](HWND h, LPARAM p) -> BOOL {
+        auto* c = reinterpret_cast<Ctx*>(p);
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (pid != GetCurrentProcessId() || !IsWindowVisible(h)) return TRUE;
+        if (GetWindowTextLengthW(h) == 0) return TRUE;
+        c->found = h;
+        return FALSE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.found;
+}
+
+static void ApplyMinWindowSize() {
+    HWND main = MainWindowHandle();
+    if (!main) return;
+    RECT wr{}, cr{};
+    GetWindowRect(main, &wr);
+    GetClientRect(main, &cr);
+
+    // 不额外乘 DPI：ptMinTrackSize 与 GetClientRect 同坐标系（窗口矩形空间），
+    // 乘一次 GetDeviceCaps 会让限值比实际客户区大一倍以上（已实测）
+    const int clientW = kMinClientW;
+    const int clientH = kMinClientH;
+    s_minTrack.x = clientW + ((wr.right - wr.left) - cr.right);
+    s_minTrack.y = clientH + ((wr.bottom - wr.top) - cr.bottom);
+    s_origWndProc = reinterpret_cast<WNDPROC>(
+        SetWindowLongPtrW(main, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(MinSizeWndProc)));
+    s_enforceLeft = 40;
+}
+
+// 客户区小于下限时放大：启动后持续检查（框架会在首帧之后还原窗口尺寸，
+// 达标也不能提前停止）。上限 40 次（500ms/次）后放弃，避免与窗口管理器死循环。
+static void EnforceMinSizeOnce() {
+    if (s_enforceLeft <= 0) return;
+    --s_enforceLeft;
+    HWND main = MainWindowHandle();
+    if (!main || s_minTrack.x <= 0) return;
+    RECT cr{}, wr{};
+    GetClientRect(main, &cr);
+    const bool below = (cr.right < kMinClientW || cr.bottom < kMinClientH);
+    if (!below) return;
+    GetWindowRect(main, &wr);
+    SetWindowPos(main, nullptr, 0, 0,
+                 (cr.right < kMinClientW) ? s_minTrack.x : (wr.right - wr.left),
+                 (cr.bottom < kMinClientH) ? s_minTrack.y : (wr.bottom - wr.top),
+                 SWP_NOMOVE | SWP_NOZORDER);
+}
+
 static void EnsureUiServices() {
     if (g_uiServicesReady) return;
     g_uiServicesReady = true;
+
+    ApplyMinWindowSize();
 
     // 消息专用窗口：承载落盘/刷新定时器（与 GLFW 消息泵同线程）
     WNDCLASSW wc = {};
@@ -180,6 +259,7 @@ const DslAppConfig& dslAppConfig() {
         });
 
         LoadThemePref();   // 先于 config 求值，clearColor 才能拿到正确的主题底色
+        LoadFontPref();    // 字体缩放偏好（自动/自定义）
 
         g_startHidden = wcsstr(GetCommandLineW(), L"--background") != nullptr;
         return true;
@@ -199,9 +279,9 @@ const DslAppConfig& dslAppConfig() {
         .onKeyEvent([](const eui::KeyEvent& e) {
             if (!e.isDown()) return;
             if (e.key == eui::InputKey::Left || e.key == eui::InputKey::PageUp) {
-                g_page = 0; app::requestUpdate();
+                g_page = (g_page + 2) % 3; app::requestUpdate();
             } else if (e.key == eui::InputKey::Right || e.key == eui::InputKey::PageDown) {
-                g_page = 1; app::requestUpdate();
+                g_page = (g_page + 1) % 3; app::requestUpdate();
             }
         });
     return config;
@@ -223,8 +303,10 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             if (g_page == 0) {
                 DrawHeatPage(ui, screen);
                 DrawTop10(ui, screen);
-            } else {
+            } else if (g_page == 1) {
                 DrawHistPage(ui, screen);
+            } else {
+                DrawSettingsPage(ui, screen);
             }
         })
         .build();

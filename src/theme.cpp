@@ -1,4 +1,5 @@
 #include "theme.h"
+#include "fontscale.h"
 #include "ui_util.h"
 
 #include <windows.h>
@@ -6,17 +7,12 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <map>
 
 namespace app {
 
 UiTheme g_theme;
 bool g_lightMode = false;
-float g_uiScale = 1.0f;
-
-// 窄窗口回落、宽窗口放大（上限 1.25 保证控制行不溢出）；基准：1180 宽 → 1.25
-void UpdateUiScale(float width) {
-    g_uiScale = std::clamp(width / 944.0f, 0.88f, 1.25f);
-}
 
 namespace {
 
@@ -92,22 +88,66 @@ components::theme::ThemeColorTokens AppTheme() {
     return t;
 }
 
-std::wstring ThemePrefPath() {
+} // namespace
+
+std::wstring PrefFilePath(const wchar_t* name) {
     wchar_t custom[MAX_PATH] = {};
     if (GetEnvironmentVariableW(L"KEYBOARDSTATS_DIR", custom, MAX_PATH) > 0) {
-        return std::wstring(custom) + L"\\ui-theme.txt";
+        return std::wstring(custom) + L"\\" + name;
     }
     wchar_t appdata[MAX_PATH] = {};
     GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
-    return std::wstring(appdata) + L"\\KeyboardStats\\ui-theme.txt";
+    return std::wstring(appdata) + L"\\KeyboardStats\\" + name;
 }
 
-void SaveThemePref(bool light) {
-    FILE* f = _wfopen(ThemePrefPath().c_str(), L"wb");
-    if (f) { fputs(light ? "light" : "dark", f); fclose(f); }
+std::string PrefGetValue(const wchar_t* file, const char* key, const char* fallback) {
+    FILE* f = _wfopen(PrefFilePath(file).c_str(), L"rb");
+    if (!f) return fallback;
+    std::string all;
+    char buf[512];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) all.append(buf, n);
+    fclose(f);
+
+    const std::string k = std::string(key) + "=";
+    size_t pos = all.find(k);
+    if (pos == std::string::npos) return fallback;
+    pos += k.size();
+    size_t end = all.find_first_of("\r\n", pos);
+    return all.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
 }
 
-} // namespace
+void PrefSetValue(const wchar_t* file, const char* key, const char* value) {
+    const std::wstring path = PrefFilePath(file);
+    std::map<std::string, std::string> kv;
+    std::vector<std::string> order;
+    if (FILE* f = _wfopen(path.c_str(), L"rb")) {
+        std::string all;
+        char buf[512];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) all.append(buf, n);
+        fclose(f);
+        size_t p = 0;
+        while (p < all.size()) {
+            size_t e = all.find_first_of("\r\n", p);
+            if (e == std::string::npos) e = all.size();
+            std::string line = all.substr(p, e - p);
+            p = e + 1;
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::string k = line.substr(0, eq);
+            if (!kv.count(k)) order.push_back(k);
+            kv[k] = line.substr(eq + 1);
+        }
+    }
+    if (!kv.count(key)) order.push_back(key);
+    kv[key] = value;
+
+    FILE* f = _wfopen(path.c_str(), L"wb");
+    if (!f) return;
+    for (const std::string& k : order) fputs((k + "=" + kv[k] + "\n").c_str(), f);
+    fclose(f);
+}
 
 core::Color HeatColor(double t) {
     if (t <= 0.0) return g_theme.idleKey;
@@ -128,8 +168,11 @@ core::Color HeatColor(double t) {
 components::theme::ThemeColorTokens CurrentTheme() { return AppTheme(); }
 
 void LoadThemePref() {
-    FILE* f = _wfopen(ThemePrefPath().c_str(), L"rb");
-    if (f) {
+    std::string mode = PrefGetValue(L"ui-theme.txt", "mode", "");
+    if (!mode.empty()) {
+        g_lightMode = mode == "light";
+    } else if (FILE* f = _wfopen(PrefFilePath(L"ui-theme.txt").c_str(), L"rb")) {
+        // 旧格式（文件内容为裸的 light/dark）：兼容读取
         char buf[16] = {};
         size_t n = fread(buf, 1, sizeof(buf) - 1, f);
         fclose(f);
@@ -150,7 +193,7 @@ void LoadThemePref() {
 void ToggleTheme() {
     g_lightMode = !g_lightMode;
     g_theme = g_lightMode ? LightThemeTokens() : DarkThemeTokens();
-    SaveThemePref(g_lightMode);
+    PrefSetValue(L"ui-theme.txt", "mode", g_lightMode ? "light" : "dark");
     app::requestUpdate();
 }
 

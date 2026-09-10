@@ -4,6 +4,8 @@
 #include "eui_neo.h"
 #include "components/theme.h"
 
+#include <string>
+
 namespace app {
 
 struct UiTheme {
@@ -27,9 +29,10 @@ struct UiTheme {
 extern UiTheme g_theme;
 extern bool g_lightMode;
 
-// 全局 UI 缩放：随窗口宽度变化（基准宽度 1180 → 1.25 倍字号，窄窗口回落）
-extern float g_uiScale;
-void UpdateUiScale(float width);
+// 数据目录下的 key=value 偏好文件读写（ui-theme.txt / ui-font.txt 共用）
+std::wstring PrefFilePath(const wchar_t* name);
+std::string  PrefGetValue(const wchar_t* file, const char* key, const char* fallback);
+void         PrefSetValue(const wchar_t* file, const char* key, const char* value);
 
 // 热度渐变：0=未用（键帽灰），0..1 = 蓝 → 黄 → 红
 core::Color HeatColor(double t);

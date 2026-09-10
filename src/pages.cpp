@@ -3,11 +3,13 @@
 #include "theme.h"
 #include "state.h"
 #include "ui_util.h"
+#include "fontscale.h"
 #include "layout.h"
 #include "components/components.h"
 #include "timeutil.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <functional>
 #include <string>
 
@@ -22,6 +24,12 @@ bool s_top10Open = true;
 
 // 布局辅助：所有固定尺寸乘以窗口缩放因子，字号与留白同步变化
 inline float Px(float v) { return v * g_uiScale; }
+
+inline std::string FormatScale(float v) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.2fx", v);
+    return buf;
+}
 
 // 控制行 Y（副标题下方）与页面内容起始 Y（控制行下方）
 inline float ControlsY() { return Px(58.0f) + Px(28.0f) + 6.0f; }
@@ -116,11 +124,11 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
     // segmented 组件自身无定位方法，用带位置的 stack 容器承载
     // 横向位置/宽度不随缩放变化（受窗口宽度约束），只缩放高度
     ui.stack("ctrl.page")
-        .x(28.0f).y(y).size(200.0f, h)
+        .x(28.0f).y(y).size(300.0f, h)
         .content([&] {
             components::segmented(ui, "seg.page")
-                .size(200.0f, h)
-                .items({"热力图", "直方图"})
+                .size(300.0f, h)
+                .items({"热力图", "直方图", "设置"})
                 .selected(g_page)
                 .theme(CurrentTheme())
                 .transition(Motion())
@@ -130,11 +138,11 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 
     ui.stack("ctrl.range")
-        .x(248.0f).y(y).size(470.0f, h)
+        .x(340.0f).y(y).size(420.0f, h)
         .content([&] {
             components::segmented(ui, "seg.range")
-                .size(470.0f, h)
-                .items({"今天", "最近 7 天", "最近 30 天", "全部"})
+                .size(420.0f, h)
+                .items({"今天", "7 天", "30 天", "全部"})
                 .selected(g_rangeMode <= 3 ? g_rangeMode : 3)
                 .theme(CurrentTheme())
                 .transition(Motion())
@@ -153,11 +161,11 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         return s.size() >= 10 ? s.substr(5) : s;
     };
 
-    MiniButton(ui, "btn.from", 726.0f, y, 96.0f, h, "从 " + ymdStr(g_pendingFrom),
+    MiniButton(ui, "btn.from", 768.0f, y, 120.0f, h, "从 " + ymdStr(g_pendingFrom),
                false, [] { g_fromOpen.set(!g_fromOpen.get()); });
-    MiniButton(ui, "btn.to", 830.0f, y, 96.0f, h, "至 " + ymdStr(g_pendingTo),
+    MiniButton(ui, "btn.to", 896.0f, y, 120.0f, h, "至 " + ymdStr(g_pendingTo),
                false, [] { g_toOpen.set(!g_toOpen.get()); });
-    MiniButton(ui, "btn.apply", 934.0f, y, 76.0f, h, "应用", true, [] {
+    MiniButton(ui, "btn.apply", 1024.0f, y, 76.0f, h, "应用", true, [] {
         if (g_pendingFrom && g_pendingTo) {
             g_customFrom = g_pendingFrom;
             g_customTo = g_pendingTo;
@@ -461,6 +469,123 @@ void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 
     DrawKeyHist(ui, x, histY, w, histH);
+}
+
+// 设置页：字体缩放（自动开关 + 无极滑块，统一作用于全部字号）
+void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
+    const auto tk = CurrentTheme();
+    const auto& m = tk.metrics;
+    const float x = Px(28.0f), y = ContentTop();
+    const float w = std::min(screen.width - Px(56.0f), Px(760.0f));
+    const float h = std::max(Px(220.0f), std::min(Px(320.0f), screen.height - y - Px(24.0f)));
+
+    ui.rect("set.panel")
+        .x(x).y(y).size(w, h)
+        .color(tk.surface)
+        .radius(m.radius.section)
+        .border(1.0f, g_theme.border)
+        .shadow(components::theme::shadow(tk, 18.0f, 4.0f, 0.20f, 0.10f))
+        .build();
+
+    ui.text("set.title")
+        .x(x + Px(24.0f)).y(y + Px(18.0f)).size(w - Px(48.0f), Px(30.0f))
+        .text("设置")
+        .fontSize(m.typography.title)
+        .lineHeight(m.typography.title + m.typography.lineGap)
+        .color(g_theme.text)
+        .build();
+
+    // ── 行 1：自动开关 ──
+    const float row1 = y + Px(74.0f);
+    ui.text("set.auto.label")
+        .x(x + Px(24.0f)).y(row1).size(w * 0.5f, Px(30.0f))
+        .text("字体大小自适应窗口")
+        .fontSize(m.typography.body)
+        .lineHeight(Px(30.0f))
+        .color(g_theme.text)
+        .build();
+    ui.stack("set.auto.row")
+        .x(x + w - Px(160.0f)).y(row1 - Px(4.0f)).size(Px(136.0f), Px(38.0f))
+        .content([&] {
+            components::toggleSwitch(ui, "set.auto")
+                .size(Px(136.0f), Px(38.0f))
+                .checked(g_fontAuto)
+                .text("自动")
+                .theme(tk)
+                .transition(Motion())
+                .onChange([](bool v) { SetFontAuto(v); app::requestUpdate(); })
+                .build();
+        })
+        .build();
+
+    // ── 行 2：字体大小滑块（无极）──
+    const float row2 = y + Px(140.0f);
+    const float sliderW = w - Px(48.0f) - Px(110.0f);
+    const float shown = g_fontAuto ? AutoScaleForWidth(screen.width) : g_fontCustom;
+    ui.text("set.slider.label")
+        .x(x + Px(24.0f)).y(row2 - Px(26.0f)).size(w * 0.6f, Px(24.0f))
+        .text("字体大小")
+        .fontSize(m.typography.label)
+        .lineHeight(Px(24.0f))
+        .color(g_theme.textMut)
+        .build();
+    ui.text("set.slider.value")
+        .x(x + w - Px(134.0f)).y(row2 - Px(26.0f)).size(Px(110.0f), Px(24.0f))
+        .text(FormatScale(shown))
+        .fontSize(m.typography.label)
+        .lineHeight(Px(24.0f))
+        .color(g_theme.text)
+        .horizontalAlign(core::HorizontalAlign::Right)
+        .build();
+
+    // 自动模式下不响应拖动，配色变暗以示不可调
+    components::SliderStyle sl;
+    sl.track = components::theme::withOpacity(g_theme.border, g_fontAuto ? 0.45f : 1.0f);
+    sl.fill = g_fontAuto ? components::theme::withOpacity(g_theme.selected, 0.35f)
+                         : g_theme.selected;
+    sl.knob = g_fontAuto ? g_theme.textMut : g_theme.text;
+    ui.stack("set.slider.row")
+        .x(x + Px(24.0f)).y(row2 - Px(8.0f)).size(sliderW, Px(46.0f))
+        .content([&] {
+            components::slider(ui, "set.font")
+                .size(sliderW, Px(46.0f))
+                .value((shown - kFontScaleMin) / (kFontScaleMax - kFontScaleMin))
+                .style(sl)
+                .theme(tk)
+                .transition(Motion())
+                .onChange([](float v) {
+                    if (g_fontAuto) return;   // 自动模式：滑块只读
+                    const float s = kFontScaleMin + v * (kFontScaleMax - kFontScaleMin);
+                    // 组件的同步回调可能带着量化后的值回来：差异过小不入库，避免字号漂移
+                    if (std::fabs(s - g_fontCustom) < 0.02f) return;
+                    SetFontCustom(s);
+                    app::requestUpdate();
+                })
+                .build();
+        })
+        .build();
+
+    ui.text("set.slider.min")
+        .x(x + Px(24.0f)).y(row2 + Px(44.0f)).size(Px(60.0f), Px(22.0f))
+        .text("小").fontSize(m.typography.caption).lineHeight(Px(22.0f))
+        .color(g_theme.textMut)
+        .build();
+    ui.text("set.slider.max")
+        .x(x + Px(24.0f) + sliderW - Px(60.0f)).y(row2 + Px(44.0f)).size(Px(60.0f), Px(22.0f))
+        .text("大").fontSize(m.typography.caption).lineHeight(Px(22.0f))
+        .color(g_theme.textMut)
+        .horizontalAlign(core::HorizontalAlign::Right)
+        .build();
+
+    // ── 行 3：说明 ──
+    ui.text("set.hint")
+        .x(x + Px(24.0f)).y(y + h - Px(66.0f)).size(w - Px(48.0f), Px(48.0f))
+        .text("自动：字号随窗口宽度缩放（宽窗口更大、窄窗口更小）。\n"
+              "关闭自动后，可拖动滑块统一调整界面全部字体，设置会自动保存。")
+        .fontSize(m.typography.caption)
+        .lineHeight(Px(22.0f))
+        .color(g_theme.textMut)
+        .build();
 }
 
 } // namespace app
