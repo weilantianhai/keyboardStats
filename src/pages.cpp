@@ -313,19 +313,14 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
 }
 
 // 按键使用次数直方图：升序（左低右高），色条沿用热力渐变；
-// 条上标注次数、条下标注键名（空间不足的自动跳过），面板右上角固定显示最多键
+// 条上标注次数、条下标注键名（空间不足的自动跳过），面板右上角固定显示最多键。
+// 宽度自适应：窄面板标题分两行、条形压缩铺满、标签按步长抽样。
 void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
     ui.rect("keyhist.panel")
         .x(x).y(y).size(w, h)
         .color(g_theme.panel)
         .radius(12.0f)
         .border(1.0f, g_theme.border)
-        .build();
-    ui.text("keyhist.title")
-        .x(x + 16.0f).y(y + 10.0f).size(w * 0.55f, 20.0f)
-        .text("按键使用次数分布（左 → 右 升序）")
-        .fontSize(14.0f).lineHeight(18.0f)
-        .color(g_theme.textMut)
         .build();
 
     if (g_keyHist.empty()) {
@@ -338,10 +333,19 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
         return;
     }
 
-    // 面板右上角：最多键名 + 次数（无论条宽如何都可见）
+    const bool narrow = w < 900.0f;   // 标题行放不下"最多"注释时换行
+    ui.text("keyhist.title")
+        .x(x + 16.0f).y(y + 10.0f).size(narrow ? w - 32.0f : w * 0.55f, 20.0f)
+        .text("按键使用次数分布（左 → 右 升序）")
+        .fontSize(14.0f).lineHeight(18.0f)
+        .color(g_theme.textMut)
+        .build();
+    // 面板右上角（窄面板时第二行右对齐）：最多键名 + 次数
     const TopEntry& maxE = g_keyHist.back();
     ui.text("keyhist.max")
-        .x(x + w * 0.5f).y(y + 10.0f).size(w * 0.5f - 16.0f, 20.0f)
+        .x(narrow ? x + 16.0f : x + w * 0.5f)
+        .y(narrow ? y + 28.0f : y + 10.0f)
+        .size(narrow ? w - 32.0f : w * 0.5f - 16.0f, 20.0f)
         .text("最多：" + maxE.name + " " + WithCommas(maxE.count) + " 次")
         .fontSize(14.0f).lineHeight(18.0f)
         .color(g_theme.text)
@@ -349,22 +353,25 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
         .build();
 
     const float pad = 14.0f;
-    const float barsTop = y + 38.0f;
+    const float barsTop = y + (narrow ? 52.0f : 38.0f);
     const float axisY = y + h - 30.0f;              // 条形底轴（下方留键名区）
     const float barsH = std::max(20.0f, axisY - barsTop);
     const float innerW = w - pad * 2.0f;
     const int n = (int)g_keyHist.size();
     float barW = innerW / (float)n;
-    barW = std::clamp(barW, 3.0f, 20.0f);
+    barW = std::clamp(barW, 2.0f, 20.0f);           // 键多时压缩铺满，不溢出面板
     const float groupW = barW * (float)n;
     const float startX = x + pad + std::max(0.0f, (innerW - groupW) * 0.5f);
+    // 标签抽样步长：条宽装不下标签时，每隔 k 根条标一次（k 使标签间距够宽）
+    const int nameStride = std::max(1, (int)std::ceil(30.0f / barW));
+    const int countStride = std::max(1, (int)std::ceil(24.0f / barW));
 
     for (int i = 0; i < n; ++i) {
         const TopEntry& e = g_keyHist[(size_t)i];
         const float frac = std::clamp(e.frac, 0.0f, 1.0f);
         const float bh = std::max(2.0f, barsH * frac);
         const float bx = startX + (float)i * barW;
-        const float bw = std::max(2.0f, barW - 2.0f);
+        const float bw = std::max(1.5f, barW - 2.0f);
         const std::string id = "keyhist.bar." + std::to_string(i);
         ui.rect(id)
             .x(bx).y(axisY - bh)
@@ -374,8 +381,12 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
             .transition(Motion())
             .animate(core::AnimProperty::Frame)
             .build();
-        // 次数：条形足够高时标在条顶上方
-        if (bh >= 16.0f) {
+        // 次数：条形足够高且水平放得下时标在条顶上方，否则按步长抽样
+        bool cLabel = bh >= 16.0f && barW >= 12.0f;
+        if (!cLabel && bh >= 16.0f && i % countStride == 0) {
+            cLabel = (float)countStride * barW >= 20.0f;
+        }
+        if (cLabel) {
             ui.text(id + ".c")
                 .x(bx - 6.0f).y(axisY - bh - 14.0f).size(bw + 12.0f, 12.0f)
                 .text(WithCommas(e.count))
@@ -384,9 +395,13 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
                 .horizontalAlign(core::HorizontalAlign::Center)
                 .build();
         }
-        // 键名：条宽装得下才标（估宽 ≈ 字符数 × 9px × 0.62）
+        // 键名：条宽装得下才标；装不下时按步长抽样标注（估宽 ≈ 字符数 × 9px × 0.62）
         const float estW = (float)e.name.size() * 9.0f * 0.62f;
-        if (barW >= estW + 2.0f) {
+        bool nLabel = barW >= estW + 2.0f;
+        if (!nLabel && i % nameStride == 0) {
+            nLabel = (float)nameStride * barW >= estW + 2.0f;
+        }
+        if (nLabel) {
             ui.text(id + ".n")
                 .x(bx - 8.0f).y(axisY + 4.0f).size(bw + 16.0f, 12.0f)
                 .text(e.name)
