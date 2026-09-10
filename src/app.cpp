@@ -37,6 +37,7 @@ std::string g_rangeText;
 
 eui::Signal<bool> g_fromOpen{false};
 eui::Signal<bool> g_toOpen{false};
+int g_keyFilter = 2;   // 按键计数筛选：0=键盘 1=鼠标 2=全部 3=分开
 
 static bool g_startHidden = false;
 static bool g_uiServicesReady = false;
@@ -89,33 +90,43 @@ void FetchStats() {
     long bucketMax = 0;
     for (const Bucket& b : s.buckets) bucketMax = std::max(bucketMax, b.count);
     g_barVals.clear(); g_barLabels.clear();
+    // 桶数超过 15 时（如 30 天）横坐标只保留日期能被 5 整除的那天，避免文字重叠
+    const bool sparseLabels = s.buckets.size() > 15;
     for (const Bucket& b : s.buckets) {
         g_barVals.push_back(bucketMax > 0 ? (float)b.count / (float)bucketMax : 0.0f);
-        g_barLabels.push_back(Utf8(b.label));
+        std::string label = Utf8(b.label);
+        if (sparseLabels && label.size() >= 5 && label[2] == '-') {
+            const int day = atoi(label.c_str() + 3);
+            if (day <= 0 || (day % 5) != 0) label.clear();
+        }
+        g_barLabels.push_back(label);
     }
 
     // 按键分布：全键参与（含小键盘与鼠标伪键），未使用的计数为 0，升序排列。
     // 这样小键盘数字（1`、2`…）即使在未使用/NumLock 关闭时也能在直方图中被识别。
     g_keyHist.clear();
     {
-        std::vector<std::pair<long, std::string>> all;
+        std::vector<std::tuple<long, std::string, bool>> all;
         std::vector<uint8_t> seen;
         auto add = [&](uint8_t vk) {
             for (uint8_t s : seen) if (s == vk) return;   // 主键区/小键盘的回车等重复键码
             seen.push_back(vk);
             const wchar_t* nm = StatName(vk);
-            all.push_back({(vk < 256) ? s.counts[vk] : 0, nm ? Utf8(nm) : ("VK" + std::to_string(vk))});
+            all.push_back({(vk < 256) ? s.counts[vk] : 0,
+                           nm ? Utf8(nm) : ("VK" + std::to_string(vk)),
+                           IsMouseKey(vk)});
         };
         for (int i = 0; i < kKeyCount; ++i) add(kKeys[i].vk);
         for (uint8_t vk : {kMouseLeft, kMouseRight, kMouseMiddle, kMouseX1, kMouseX2,
                            kWheelUp, kWheelDown, kWheelLeft, kWheelRight}) add(vk);
         long top1 = 0;
-        for (const auto& kv : all) top1 = std::max(top1, kv.first);
+        for (const auto& kv : all) top1 = std::max(top1, std::get<0>(kv));
         std::stable_sort(all.begin(), all.end(),
-                         [](const auto& a, const auto& b) { return a.first < b.first; });
+                         [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
         for (const auto& kv : all) {
-            g_keyHist.push_back({kv.second, kv.first,
-                                 top1 > 0 ? (float)kv.first / (float)top1 : 0.0f});
+            g_keyHist.push_back({std::get<1>(kv), std::get<0>(kv),
+                                 top1 > 0 ? (float)std::get<0>(kv) / (float)top1 : 0.0f,
+                                 std::get<2>(kv)});
         }
     }
 

@@ -190,11 +190,11 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
             const float midW = std::max(Px(11.0f), bodyW * 0.19f);
             const float midX = pad + (bodyW - midW) * 0.5f;
             const float keyH = std::max(Px(8.0f), bodyH * 0.13f);
-            button("mouse.m", kMouseMiddle, midX, pad + Px(1.0f), midW, bodyH * 0.16f, 0.40f);
-            // 滚轮上滑键（^）→ 滚轮本体 → 下滑键（v）
-            const float wUpTop = pad + bodyH * 0.22f;
-            button("mouse.wup", kWheelUp, midX, wUpTop, midW, keyH, 0.35f, "^", 0.7f);
-            const float wheelY = wUpTop + keyH + Px(2.0f);
+            // 中键上方 = 滚轮上滑（^），下方 = 下滑（v）
+            const float upTop = pad + Px(1.0f);
+            button("mouse.wup", kWheelUp, midX, upTop, midW, keyH, 0.35f, "^", 0.7f);
+            button("mouse.m", kMouseMiddle, midX, upTop + keyH + Px(2.0f), midW, bodyH * 0.16f, 0.40f);
+            const float wheelY = upTop + keyH + Px(2.0f) + bodyH * 0.16f + Px(2.0f);
             const float wheelH = std::max(Px(8.0f), bodyH * 0.11f);
             ui.rect("mouse.wheel")
                 .x(midX + midW * 0.28f).y(wheelY)
@@ -207,10 +207,10 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
                    midW, keyH, 0.35f, "v", 0.7f);
             // 侧键 X1 / X2（机身左侧两条）
             const float sideW = std::max(Px(9.0f), bodyW * 0.15f);
-            button("mouse.x1", kMouseX1, pad + bodyW * 0.03f, pad + bodyH * 0.55f,
-                   sideW, bodyH * 0.15f, 0.35f);
-            button("mouse.x2", kMouseX2, pad + bodyW * 0.03f, pad + bodyH * 0.74f,
-                   sideW, bodyH * 0.15f, 0.35f);
+            button("mouse.x1", kMouseX1, pad + bodyW * 0.03f, pad + bodyH * 0.62f,
+                   sideW, bodyH * 0.13f, 0.35f);
+            button("mouse.x2", kMouseX2, pad + bodyW * 0.03f, pad + bodyH * 0.79f,
+                   sideW, bodyH * 0.13f, 0.35f);
         })
         .build();
 }
@@ -605,7 +605,32 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
         .theme(CurrentTheme())
         .transition(Motion())
         .content([&](core::dsl::Ui& cui, float contentW, float) {
-            if (g_keyHist.empty()) {
+            // 依筛选构建行：0=键盘 1=鼠标 2=全部 3=分开（键盘区在上、鼠标区在下）
+            struct Row { const TopEntry* e; std::string header; };
+            std::vector<Row> rows;
+            auto pushDesc = [&](bool mouseGroup) {
+                for (int k = (int)g_keyHist.size() - 1; k >= 0; --k) {
+                    const TopEntry& e = g_keyHist[(size_t)k];
+                    if (e.count <= 0 || e.isMouse != mouseGroup) continue;
+                    rows.push_back({&e, std::string()});
+                }
+            };
+            if (g_keyFilter == 3) {
+                rows.push_back({nullptr, "键盘"});
+                pushDesc(false);
+                rows.push_back({nullptr, "鼠标"});
+                pushDesc(true);
+            } else if (g_keyFilter == 2) {
+                for (int k = (int)g_keyHist.size() - 1; k >= 0; --k) {
+                    const TopEntry& e = g_keyHist[(size_t)k];
+                    if (e.count <= 0) continue;
+                    rows.push_back({&e, std::string()});
+                }
+            } else {
+                pushDesc(g_keyFilter == 1);
+            }
+
+            if (rows.empty()) {
                 cui.text("list.empty")
                     .size(contentW, Px(24.0f))
                     .text("暂无数据，去打几个字吧")
@@ -614,13 +639,22 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
                     .build();
                 return;
             }
-            const int cnt = (int)g_keyHist.size();
-            int shown = 0;
-            for (int k = 0; k < cnt; ++k) {
-                const TopEntry& e = g_keyHist[(size_t)(cnt - 1 - k)];   // 降序
-                if (e.count <= 0) continue;                            // 列表只列有记录的按键
-                const int rank = ++shown;
-                const std::string id = "list.row." + std::to_string(rank);
+            int rank = 0;
+            for (size_t k = 0; k < rows.size(); ++k) {
+                const Row& r = rows[k];
+                const std::string id = "list.row." + std::to_string(k);
+                if (r.e == nullptr) {                       // 分区标题
+                    cui.text(id + ".header")
+                        .size(contentW, Px(24.0f))
+                        .text(r.header)
+                        .fontSize(Px(15.0f)).lineHeight(Px(22.0f))
+                        .color(g_theme.textMut)
+                        .build();
+                    rank = 0;
+                    continue;
+                }
+                const TopEntry& e = *r.e;
+                ++rank;
                 cui.stack(id)
                     .size(contentW, rowH)
                     .content([&] {
@@ -697,24 +731,39 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
                 return;
             }
 
-            // 右上角注解：最多键（键名标签被隐藏时也能看到极值）
+            // 筛选：键盘 / 鼠标 / 全部 / 分开（分开=左键盘右鼠标，只改排序不改盒子）
+            const float filterW = Px(360.0f), filterH = Px(34.0f);
+            ui.stack("keyhist.filter")
+                .x(w - titleX - filterW).y(m.typography.control - Px(2.0f)).size(filterW, filterH)
+                .content([&] {
+                    components::segmented(ui, "seg.keyfilter")
+                        .size(filterW, filterH)
+                        .items({"键盘", "鼠标", "全部", "分开"})
+                        .selected(g_keyFilter)
+                        .theme(tk)
+                        .transition(Motion())
+                        .onChange([](int v) { g_keyFilter = v; app::requestUpdate(); })
+                        .build();
+                })
+                .build();
+
+            // 右上角注解：最多键
             const TopEntry& maxE = g_keyHist.back();
             ui.text("keyhist.max")
-                .x(w * 0.5f)
-                .y(m.typography.control + (m.typography.title - m.typography.label) * 0.5f)
-                .size(std::max(0.0f, w * 0.5f - titleX), m.control.compact)
+                .x(titleX)
+                .y(m.typography.control + m.typography.title + Px(4.0f))
+                .size(std::max(0.0f, w - titleX * 2.0f), m.control.compact)
                 .text("最多：" + maxE.name + " " + WithCommas(maxE.count) + " 次")
                 .fontSize(m.typography.label)
                 .lineHeight(m.typography.label + m.typography.lineGap)
                 .color(g_theme.textMut)
-                .horizontalAlign(core::HorizontalAlign::Right)
                 .build();
 
             // 绘图区几何与 barChart 相同
             const float plotX = 32.0f;
             const float plotY = 70.0f;
             const float plotW = std::max(1.0f, w - 64.0f);
-            const float plotH = std::max(1.0f, h - 112.0f);
+            const float plotH = std::max(1.0f, h - 78.0f);   // 无横坐标文字，底部空间留给条形
             const float bottomY = plotY + plotH;
             const core::Color grid = components::theme::withOpacity(g_theme.border,
                                                                    tk.dark ? 0.38f : 0.36f);
@@ -726,58 +775,100 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
                     .build();
             }
 
-            const int n = (int)g_keyHist.size();
-            const float slotW = plotW / (float)n;
-            // barChart 用 min(32, max(18, slot*0.54))；键数可达上百，下限放宽到 2px 防溢出
-            const float barW = std::min(32.0f, std::max(2.0f, slotW * 0.54f));
-            const float labelFont = m.typography.label;
-            for (int i = 0; i < n; ++i) {
-                const TopEntry& e = g_keyHist[(size_t)i];
-                const float frac = std::clamp(e.frac, 0.0f, 1.0f);
-                const float barH = std::max(8.0f, frac * plotH);
-                const float bx = plotX + (float)i * slotW + (slotW - barW) * 0.5f;
-                const float by = bottomY - barH;
-                const std::string barId = "keyhist.bar." + std::to_string(i);
-                const core::Color color = HeatColor(frac);   // 热力渐变：蓝 → 黄 → 红
-                ui.rect(barId)
-                    .x(bx).y(by).size(barW, barH)
-                    .states(color,
-                            core::mixColor(color, core::Color{1, 1, 1, 1}, 0.18f),
-                            core::mixColor(color, core::Color{0, 0, 0, 1}, 0.12f))
-                    .radius(std::min(m.radius.popup, barW * 0.34f))
-                    .instantStates()
-                    .transition(Motion())
-                    .animate(core::AnimProperty::Frame | core::AnimProperty::Color)
-                    .build();
+            // 分组：键盘 / 鼠标
+            const bool wantKb = (g_keyFilter == 0 || g_keyFilter == 2 || g_keyFilter == 3);
+            const bool wantMs = (g_keyFilter == 1 || g_keyFilter == 2 || g_keyFilter == 3);
 
-                // 键名：条宽放得下就标；放不下时按步长稀疏标注（保证小键盘 1`、2` 等仍可辨认）
-                const float estW = (float)e.name.size() * labelFont * 0.62f;
-                bool nLabel = slotW >= estW + 4.0f;
-                if (!nLabel) {
-                    const int stride = std::max(1, (int)std::ceil((estW + 4.0f) / std::max(1.0f, slotW)));
-                    nLabel = (i % stride) == 0;
-                }
-                if (nLabel) {
-                    ui.text(barId + ".label")
-                        .x(bx - m.spacing.compact).y(h - m.control.menuItem)
-                        .size(barW + m.spacing.section, m.control.indicator)
-                        .text(e.name)
-                        .fontSize(labelFont)
-                        .lineHeight(labelFont + m.typography.lineGap)
-                        .color(components::theme::withOpacity(g_theme.text, 0.56f))
-                        .horizontalAlign(core::HorizontalAlign::Center)
+            // 画一组条（升序），无横坐标文字，靠悬浮查看详情
+            auto drawBars = [&](const std::string& prefix, bool mouseGroup,
+                                float groupX, float groupW) {
+                std::vector<const TopEntry*> items;
+                for (const TopEntry& e : g_keyHist)
+                    if (e.isMouse == mouseGroup) items.push_back(&e);
+                if (items.empty()) return;
+                const int n = (int)items.size();
+                const float slotW = groupW / (float)n;
+                // 去掉横坐标文字后条形可以更宽一些
+                const float barW = std::min(40.0f, std::max(2.0f, slotW * 0.70f));
+                for (int i = 0; i < n; ++i) {
+                    const TopEntry& e = *items[(size_t)i];
+                    const float frac = std::clamp(e.frac, 0.0f, 1.0f);
+                    const float barH = std::max(8.0f, frac * plotH);
+                    const float bx = groupX + (float)i * slotW + (slotW - barW) * 0.5f;
+                    const float by = bottomY - barH;
+                    const std::string barId = prefix + std::to_string(i);
+                    const core::Color color = HeatColor(frac);   // 热力渐变：蓝 → 黄 → 红
+                    ui.rect(barId)
+                        .x(bx).y(by).size(barW, barH)
+                        .states(color,
+                                core::mixColor(color, core::Color{1, 1, 1, 1}, 0.18f),
+                                core::mixColor(color, core::Color{0, 0, 0, 1}, 0.12f))
+                        .radius(std::min(m.radius.popup, barW * 0.34f))
+                        .instantStates()
+                        .transition(Motion())
+                        .animate(core::AnimProperty::Frame | core::AnimProperty::Color)
+                        .build();
+                    components::tooltip(ui, barId + ".tooltip")
+                        .theme(tk)
+                        .source(barId)
+                        .value(e.name + " " + WithCommas(e.count) + " 次")
+                        .anchor(bx + barW * 0.5f, by)
+                        .bounds(w, h)
+                        .style(components::TooltipStyle(tk))
                         .build();
                 }
+            };
 
-                // 悬浮详情：如 "z 1254 次"
-                components::tooltip(ui, barId + ".tooltip")
-                    .theme(tk)
-                    .source(barId)
-                    .value(e.name + " " + WithCommas(e.count) + " 次")
-                    .anchor(bx + barW * 0.5f, by)
-                    .bounds(w, h)
-                    .style(components::TooltipStyle(tk))
-                    .build();
+            if (g_keyFilter == 3) {
+                // 分开：左半键盘、右半鼠标（同一条基线，峰值统一归一化）
+                const float halfGap = Px(28.0f);
+                const float halfW = (plotW - halfGap) * 0.5f;
+                ui.text("keyhist.tag.kb")
+                    .x(plotX).y(plotY - Px(22.0f)).size(halfW, Px(18.0f))
+                    .text("键盘").fontSize(m.typography.caption).lineHeight(Px(18.0f))
+                    .color(g_theme.textMut).build();
+                ui.text("keyhist.tag.ms")
+                    .x(plotX + halfW + halfGap).y(plotY - Px(22.0f)).size(halfW, Px(18.0f))
+                    .text("鼠标").fontSize(m.typography.caption).lineHeight(Px(18.0f))
+                    .color(g_theme.textMut).build();
+                drawBars("keyhist.kb.", false, plotX, halfW);
+                drawBars("keyhist.ms.", true, plotX + halfW + halfGap, halfW);
+            } else if (g_keyFilter == 2) {
+                std::vector<const TopEntry*> items;   // 全部：混排（数组本身已按次数升序）
+                for (const TopEntry& e : g_keyHist) items.push_back(&e);
+                const int n = (int)items.size();
+                const float slotW = plotW / (float)std::max(1, n);
+                const float barW = std::min(40.0f, std::max(2.0f, slotW * 0.70f));
+                for (int i = 0; i < n; ++i) {
+                    const TopEntry& e = *items[(size_t)i];
+                    const float frac = std::clamp(e.frac, 0.0f, 1.0f);
+                    const float barH = std::max(8.0f, frac * plotH);
+                    const float bx = plotX + (float)i * slotW + (slotW - barW) * 0.5f;
+                    const float by = bottomY - barH;
+                    const std::string barId = "keyhist.all." + std::to_string(i);
+                    const core::Color color = HeatColor(frac);
+                    ui.rect(barId)
+                        .x(bx).y(by).size(barW, barH)
+                        .states(color,
+                                core::mixColor(color, core::Color{1, 1, 1, 1}, 0.18f),
+                                core::mixColor(color, core::Color{0, 0, 0, 1}, 0.12f))
+                        .radius(std::min(m.radius.popup, barW * 0.34f))
+                        .instantStates()
+                        .transition(Motion())
+                        .animate(core::AnimProperty::Frame | core::AnimProperty::Color)
+                        .build();
+                    components::tooltip(ui, barId + ".tooltip")
+                        .theme(tk)
+                        .source(barId)
+                        .value(e.name + " " + WithCommas(e.count) + " 次")
+                        .anchor(bx + barW * 0.5f, by)
+                        .bounds(w, h)
+                        .style(components::TooltipStyle(tk))
+                        .build();
+                }
+            } else {
+                drawBars(g_keyFilter == 1 ? "keyhist.ms." : "keyhist.kb.",
+                         g_keyFilter == 1, plotX, plotW);
             }
         })
         .build();

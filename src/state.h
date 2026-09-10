@@ -9,7 +9,12 @@
 
 namespace app {
 
-struct TopEntry { std::string name; long count = 0; float frac = 0.0f; };
+struct TopEntry {
+    std::string name;
+    long count = 0;
+    float frac = 0.0f;
+    bool isMouse = false;   // 鼠标/滚轮伪键（用于分区显示与筛选）
+};
 
 extern int  g_page;           // 0=热力图 1=直方图
 extern int  g_rangeMode;      // 0=今天 1=7天 2=30天 3=全部 4=自定义
@@ -25,6 +30,9 @@ extern std::string g_rangeText;
 
 extern eui::Signal<bool> g_fromOpen;
 extern eui::Signal<bool> g_toOpen;
+
+// 按键计数筛选：0=键盘 1=鼠标 2=全部 3=分开（左键盘右鼠标）
+extern int g_keyFilter;
 
 // 数据刷新（storage → 缓存），pages.cpp 的交互回调会调用
 void FetchStats();

@@ -69,6 +69,13 @@ inline constexpr uint8_t kWheelDown = 0xE1;
 inline constexpr uint8_t kWheelLeft = 0xE2;
 inline constexpr uint8_t kWheelRight = 0xE3;
 
+// 是否为鼠标/滚轮伪键（用于分区统计与筛选）
+inline bool IsMouseKey(uint8_t vk) {
+    return vk == kMouseLeft || vk == kMouseRight || vk == kMouseMiddle ||
+           vk == kMouseX1 || vk == kMouseX2 || vk == kWheelUp || vk == kWheelDown ||
+           vk == kWheelLeft || vk == kWheelRight;
+}
+
 inline constexpr int kKeyCount = sizeof(kKeys) / sizeof(kKeys[0]);
 
 // 统计排行用的名称（中文优先，字母数字用原字符）
