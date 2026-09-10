@@ -906,6 +906,51 @@ int s_pendingDirFiles = 0;    // 待搬运的数据文件个数
 eui::Signal<float> s_settingsScroll{0.0f};
 eui::Signal<float> s_themeScroll{0.0f};
 
+// 简易滚动容器：内容高度由调用方给出，内容回调每帧只跑一次。
+// 不用框架 ScrollView 的自动测量——它会先在一个独立的测量 Ui 里把内容回调再跑一遍，
+// 那一遍创建的交互元素会留下按"内容坐标"算的命中框；操作几次之后这些残留命中框会和
+// 真实元素抢悬停，鼠标一进组件就乱跳。这里把高度写死，就只构建一次。
+float ScrollArea(core::dsl::Ui& ui, const std::string& id, float x, float y, float w, float h,
+                 float contentH, eui::Signal<float>& offSignal,
+                 const std::function<void(core::dsl::Ui&, float)>& body) {
+    const float maxOff = std::max(0.0f, contentH - h);
+    const float off = std::clamp(offSignal.get(), 0.0f, maxOff);
+    const float bodyW = std::max(Px(120.0f), w - Px(16.0f));   // 右侧留给自绘滚动条
+    ui.stack(id)
+        .x(x).y(y).size(w, h)
+        .clip()
+        .scrollState(id, off, maxOff, Px(52.0f))
+        .onScrollOffsetChanged([&offSignal](float v) { offSignal.set(v); })
+        .content([&] {
+            ui.stack(id + ".content")
+                .size(bodyW, contentH)
+                .scrollContentFrom(id)   // 让子树跟着偏移，并修正命中判定
+                .content([&] { body(ui, bodyW); })
+                .build();
+        })
+        .build();
+    return off;
+}
+
+// 自己画的滚动条（框架内置的那条在本项目主题下不显示）
+void ScrollThumb(core::dsl::Ui& ui, const char* id, float x, float y, float w, float viewH,
+                 float contentH, float off) {
+    if (contentH <= viewH) return;
+    const float barW = Px(6.0f);
+    const float barX = x + w - barW;
+    const float maxOff = contentH - viewH;
+    const float thumbH = std::max(Px(48.0f), viewH * (viewH / contentH));
+    const float thumbY = y + (viewH - thumbH) * (std::clamp(off, 0.0f, maxOff) / maxOff);
+    ui.rect(std::string(id) + ".track")
+        .x(barX).y(y).size(barW, viewH)
+        .color(components::theme::withOpacity(g_theme.border, 0.35f))
+        .radius(barW * 0.5f).build();
+    ui.rect(std::string(id) + ".thumb")
+        .x(barX).y(thumbY).size(barW, thumbH)
+        .color(components::theme::withOpacity(g_theme.textMut, 0.75f))
+        .radius(barW * 0.5f).build();
+}
+
 // 主题页三个面板的高度（同设置页：按内容固定，不跟窗口高度挂钩）
 constexpr float kPalettePanelH = 258.0f;
 constexpr float kHeatPanelH    = 196.0f;
@@ -1319,51 +1364,12 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
 
     const float contentH = Px(kFontPanelH) + gapY + Px(kRecPanelH);
 
-    components::scrollView(ui, "set.scroll")
-        .position(x, y)
-        .size(w, viewH)
-        .gap(gapY)
-        .step(Px(52.0f))
-        // 框架内置滚动条在本项目这套主题下基本看不见，滑块改为下面自己画：
-        // 宽度设 0 关掉内置的（避免两条重叠），只保留 gap 把内容区让出右侧一条。
-        .scrollbarWidth(0.0f)
-        .scrollbarGap(Px(16.0f))
-        .theme(tk)
-        .bind(s_settingsScroll)
-        .content([&](core::dsl::Ui& su, float contentW, float) {
-            // 内容画在一个尺寸明确的画布上（框架示例的写法）：绝对定位的子元素
-            // 不会给 wrapContent 的列贡献高度，不套画布的话内容高度算成 0。
-            su.stack("set.canvas")
-                .size(contentW, Px(kFontPanelH) + gapY + Px(kRecPanelH))
-                .content([&] {
-                    DrawFontPanel(su, contentW, 0.0f, tk, screen.width);
-                    DrawRecordPanel(su, contentW, Px(kFontPanelH) + gapY, tk);
-                })
-                .build();
-        })
-        .build();
-
-    // 自己画滑块：框架内置的滚动条在本项目这套主题/尺寸下不显示（已用像素采样确认
-    // 面板右侧整条都是背景色），所以用滚动信号自己画一根，保证"能滚"这件事可见。
-    if (contentH > viewH) {
-        const float barW = Px(6.0f);
-        const float barX = x + w - barW;
-        const float maxOff = contentH - viewH;
-        const float thumbH = std::max(Px(48.0f), viewH * (viewH / contentH));
-        const float off = std::clamp(s_settingsScroll.get(), 0.0f, maxOff);
-        const float thumbY = y + (viewH - thumbH) * (off / maxOff);
-
-        ui.rect("set.scroll.track")
-            .x(barX).y(y).size(barW, viewH)
-            .color(components::theme::withOpacity(g_theme.border, 0.35f))
-            .radius(barW * 0.5f)
-            .build();
-        ui.rect("set.scroll.thumb")
-            .x(barX).y(thumbY).size(barW, thumbH)
-            .color(components::theme::withOpacity(g_theme.textMut, 0.75f))
-            .radius(barW * 0.5f)
-            .build();
-    }
+    const float off = ScrollArea(ui, "set.scroll", x, y, w, viewH, contentH, s_settingsScroll,
+                                 [&](core::dsl::Ui& su, float cw) {
+                                     DrawFontPanel(su, cw, 0.0f, tk, screen.width);
+                                     DrawRecordPanel(su, cw, Px(kFontPanelH) + gapY, tk);
+                                 });
+    ScrollThumb(ui, "set.scroll", x, y, w, viewH, contentH, off);
 
     // 清除记录：两步确认弹窗
     if (s_clearConfirm > 0) {
@@ -1622,17 +1628,8 @@ void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen) {
         }
     };
 
-    components::scrollView(ui, "theme.scroll")
-        .position(x, y)
-        .size(w, viewH)
-        .gap(gapY)
-        .step(Px(52.0f))
-        .scrollbarWidth(0.0f)
-        .scrollbarGap(Px(16.0f))
-        .theme(tk)
-        .bind(s_themeScroll)
-        .content([&](core::dsl::Ui& su, float cw, float) {
-            su.stack("theme.canvas").size(cw, contentH).content([&] {
+    const float off = ScrollArea(ui, "theme.scroll", x, y, w, viewH, contentH, s_themeScroll,
+                                 [&](core::dsl::Ui& su, float cw) {
                 // ── 1. 配色方案 ──
                 panelBg("th.pal.panel", 0.0f, palH);
                 heading("th.pal.title", 0.0f, "配色方案",
@@ -1730,28 +1727,8 @@ void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen) {
                     .lineHeight(Px(24.0f))
                     .color(g_theme.textMut)
                     .build();
-            })
-            .build();
-        })
-        .build();
-
-    // 自己画的滚动条（框架内置的在这套主题下不显示）
-    if (contentH > viewH) {
-        const float barW = Px(6.0f);
-        const float barX = x + w - barW;
-        const float maxOff = contentH - viewH;
-        const float thumbH = std::max(Px(48.0f), viewH * (viewH / contentH));
-        const float off = std::clamp(s_themeScroll.get(), 0.0f, maxOff);
-        const float thumbY = y + (viewH - thumbH) * (off / maxOff);
-        ui.rect("theme.scroll.track")
-            .x(barX).y(y).size(barW, viewH)
-            .color(components::theme::withOpacity(g_theme.border, 0.35f))
-            .radius(barW * 0.5f).build();
-        ui.rect("theme.scroll.thumb")
-            .x(barX).y(thumbY).size(barW, thumbH)
-            .color(components::theme::withOpacity(g_theme.textMut, 0.75f))
-            .radius(barW * 0.5f).build();
-    }
+                                 });
+    ScrollThumb(ui, "theme.scroll", x, y, w, viewH, contentH, off);
 
     // 取色面板（框架组件，全屏遮罩 + 面板）
     if (!s_pickerTarget.empty()) {
@@ -1786,13 +1763,15 @@ void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
     const auto tk = CurrentTheme();
     const auto& m = tk.metrics;
 
+    // 注意：整块弹窗**不要**设 zIndex —— MiniButton 内部不带 zIndex，
+    // 一旦遮罩层用了更大的 zIndex，按钮就会跑到遮罩后面（看不见也点不到）。
+    // 和"清除记录"那套弹窗一样，靠"后画覆盖先画"就够了。
     ui.rect("close.mask")
         .size(screen.width, screen.height)
         .color(core::Color{0.0f, 0.0f, 0.0f, 0.45f})
-        .zIndex(90)
         .onClick([] { g_closeDialogOpen = false; app::requestUpdate(); })
         .build();
-    const float dw = Px(500.0f), dh = Px(268.0f);
+    const float dw = Px(520.0f), dh = Px(280.0f);
     const float dx = (screen.width - dw) * 0.5f, dy = (screen.height - dh) * 0.5f;
     ui.rect("close.dlg")
         .x(dx).y(dy).size(dw, dh)
@@ -1800,30 +1779,28 @@ void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
         .radius(Px(14.0f))
         .border(1.0f, g_theme.border)
         .shadow(components::theme::shadow(tk, 28.0f, 8.0f, 0.28f, 0.16f))
-        .zIndex(91)
         .build();
     ui.text("close.title")
-        .x(dx + Px(26.0f)).y(dy + Px(22.0f)).size(dw - Px(52.0f), Px(34.0f))
+        .x(dx + Px(26.0f)).y(dy + Px(20.0f)).size(dw - Px(52.0f), Px(32.0f))
         .text("关闭窗口")
         .fontSize(m.typography.title)
         .lineHeight(m.typography.title + m.typography.lineGap)
         .color(g_theme.text)
-        .zIndex(91)
         .build();
+    // 手动换行：这一行太长会超出弹窗宽度
     ui.text("close.text")
-        .x(dx + Px(26.0f)).y(dy + Px(66.0f)).size(dw - Px(52.0f), Px(72.0f))
-        .text("最小化到托盘后，只保留按键记录程序继续后台运行，图形界面会完全停止渲染，"
-              "内存占用很小；需要看统计时点托盘图标的 Show 即可恢复。")
+        .x(dx + Px(26.0f)).y(dy + Px(64.0f)).size(dw - Px(52.0f), Px(76.0f))
+        .text("最小化到托盘后只保留记录程序在后台运行，\n"
+              "图形界面会完全停止渲染，内存占用很小；\n"
+              "需要看统计时点托盘图标的 Show 即可恢复。")
         .fontSize(m.typography.body)
         .lineHeight(Px(24.0f))
         .color(g_theme.textMut)
-        .zIndex(91)
         .build();
 
     // 位置需要固定宽度的容器承载（组件自身无定位方法）
     ui.stack("close.check.row")
-        .x(dx + Px(26.0f)).y(dy + Px(148.0f)).size(Px(280.0f), Px(34.0f))
-        .zIndex(91)
+        .x(dx + Px(26.0f)).y(dy + Px(152.0f)).size(Px(300.0f), Px(34.0f))
         .content([&] {
             components::checkbox(ui, "close.check")
                 .size(Px(280.0f), Px(34.0f))
