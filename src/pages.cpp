@@ -61,6 +61,147 @@ void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
         .build();
 }
 
+// ────────────────── 面板尺寸无极调节（右下角指示器拖动，持久化） ──────────────────
+
+float s_kbScale = 1.0f;      // 键盘盒尺寸系数
+float s_mouseScale = 1.0f;   // 鼠标盒尺寸系数
+float s_listScale = 1.0f;    // 右侧按键列表宽度系数
+bool  s_layoutLoaded = false;
+
+void EnsureLayoutPrefs() {
+    if (s_layoutLoaded) return;
+    s_layoutLoaded = true;
+    s_kbScale    = std::clamp((float)atof(PrefGetValue(L"ui-layout.txt", "kb", "1.0").c_str()), 0.35f, 2.0f);
+    s_mouseScale = std::clamp((float)atof(PrefGetValue(L"ui-layout.txt", "mouse", "1.0").c_str()), 0.4f, 3.0f);
+    s_listScale  = std::clamp((float)atof(PrefGetValue(L"ui-layout.txt", "list", "1.0").c_str()), 0.6f, 2.0f);
+}
+
+void SaveLayoutPref(const char* key, float value) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.3f", value);
+    PrefSetValue(L"ui-layout.txt", key, buf);
+}
+
+// 面板右下角外侧的尺寸指示器：按住左键拖动无极调节，松手存档
+void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
+                  float* value, float minValue, float maxValue, const char* prefKey) {
+    const float s = Px(15.0f);
+    ui.rect(id)
+        .x(x).y(y).size(s, s)
+        .color(g_theme.panelHi)
+        .radius(Px(4.0f))
+        .border(1.0f, g_theme.border)
+        .states(g_theme.panelHi, g_theme.panelActive, g_theme.selected)
+        .transition(Motion())
+        .animate(core::AnimProperty::Color)
+        .onDrag([value, minValue, maxValue](auto& e) {
+            const float delta = (float)(e.deltaX + e.deltaY);
+            if (delta == 0.0f) return;
+            *value = std::clamp(*value * (1.0f + delta / 260.0f), minValue, maxValue);
+            app::requestUpdate();
+        })
+        .onRelease([value, prefKey](auto&, auto&) { SaveLayoutPref(prefKey, *value); })
+        .build();
+    for (int i = 0; i < 3; ++i) {   // 抓握纹
+        ui.rect(id + ".g" + std::to_string(i))
+            .x(x + s * 0.26f + (float)i * s * 0.19f).y(y + s * 0.3f)
+            .size(Px(1.5f), s * 0.4f)
+            .color(g_theme.textMut)
+            .radius(Px(1.0f))
+            .build();
+    }
+}
+
+// 鼠标面板：左右键/中键/侧键/滚轮按次数着色（与键盘共用热度语义与悬浮详情）
+void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
+    const auto tk = CurrentTheme();
+    ui.stack("mouse.page")
+        .x(x).y(y)
+        .size(w, h)
+        .content([&] {
+            const float pad = Px(7.0f);
+            const float bodyW = w - pad * 2.0f;
+            const float bodyH = h - pad * 2.0f;
+            ui.rect("mouse.body")
+                .x(pad).y(pad).size(bodyW, bodyH)
+                .color(g_theme.idleKey)
+                .radius(std::min(bodyW, bodyH) * 0.42f)
+                .border(1.0f, g_theme.idleEdge)
+                .build();
+
+            auto button = [&](const std::string& id, uint8_t vk,
+                              float bx, float by, float bw, float bh, float radiusK) {
+                const long c = (vk < 256) ? g_stats.counts[vk] : 0;
+                double t = g_maxKey > 1 ? (double)c / (double)g_maxKey : 0.0;
+                if (c > 0 && t < 0.08) t = 0.08;
+                const core::Color fill = HeatColor(t);
+                ui.rect(id)
+                    .x(bx).y(by).size(bw, bh)
+                    .color(fill)
+                    .radius(std::min(bw, bh) * radiusK)
+                    .states(fill,
+                            core::mixColor(fill, Hex(0xFFFFFF), 0.15f),
+                            core::mixColor(fill, Hex(0xFFFFFF), 0.25f))
+                    .instantStates()
+                    .transition(Motion())
+                    .animate(core::AnimProperty::Color)
+                    .build();
+                components::tooltip(ui, id + ".tip")
+                    .theme(tk)
+                    .source(id)
+                    .value(Utf8(StatName(vk)) + " " + WithCommas(c) + " 次")
+                    .anchor(bx + bw * 0.5f, by)
+                    .bounds(w, h)
+                    .style(components::TooltipStyle(tk))
+                    .zIndex(300)
+                    .build();
+            };
+
+            const float gap = Px(2.0f);
+            const float topH = bodyH * 0.40f;
+            const float halfW = (bodyW - gap) * 0.5f;
+            // 左键 / 右键
+            button("mouse.l", kMouseLeft, pad, pad, halfW, topH, 0.30f);
+            button("mouse.r", kMouseRight, pad + halfW + gap, pad, halfW, topH, 0.30f);
+            // 中键 + 滚轮（中缝）
+            const float midW = std::max(Px(9.0f), bodyW * 0.17f);
+            const float midX = pad + (bodyW - midW) * 0.5f;
+            button("mouse.m", kMouseMiddle, midX, pad + Px(1.0f), midW, bodyH * 0.20f, 0.40f);
+            const float wheelH = bodyH * 0.22f;
+            const float wheelY = pad + bodyH * 0.30f;
+            ui.rect("mouse.wheel")
+                .x(midX + midW * 0.2f).y(wheelY)
+                .size(midW * 0.6f, wheelH)
+                .color(HeatColor((g_maxKey > 1)
+                                     ? std::max(0.08, (double)std::max(g_stats.counts[kWheelUp],
+                                                                       g_stats.counts[kWheelDown]) / (double)g_maxKey)
+                                     : 0.0))
+                .radius(midW * 0.25f)
+                .states(g_theme.panelHi, g_theme.panelActive, g_theme.selected)
+                .instantStates()
+                .transition(Motion())
+                .animate(core::AnimProperty::Color)
+                .build();
+            components::tooltip(ui, "mouse.wheel.tip")
+                .theme(tk)
+                .source("mouse.wheel")
+                .value("滚轮 上 " + WithCommas(g_stats.counts[kWheelUp]) +
+                       " / 下 " + WithCommas(g_stats.counts[kWheelDown]) + " 次")
+                .anchor(midX + midW * 0.5f, wheelY)
+                .bounds(w, h)
+                .style(components::TooltipStyle(tk))
+                .zIndex(300)
+                .build();
+            // 侧键 X1 / X2（机身左侧两条）
+            const float sideW = std::max(Px(7.0f), bodyW * 0.13f);
+            button("mouse.x1", kMouseX1, pad + bodyW * 0.04f, pad + bodyH * 0.50f,
+                   sideW, bodyH * 0.16f, 0.35f);
+            button("mouse.x2", kMouseX2, pad + bodyW * 0.04f, pad + bodyH * 0.70f,
+                   sideW, bodyH * 0.16f, 0.35f);
+        })
+        .build();
+}
+
 void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
                 long count, double t) {
     const std::string id = "key." + std::to_string(idx);
@@ -111,7 +252,7 @@ void DrawHeader(core::dsl::Ui& ui, float w) {
         .build();
     const float bh = Px(34.0f), by = Px(22.0f);
     MiniButton(ui, "hd.top10", w - 306.0f, by, 160.0f, bh,
-               s_top10Open ? "隐藏 Top 10" : "显示 Top 10", false,
+               s_top10Open ? "隐藏按键列表" : "显示按键列表", false,
                [] { s_top10Open = !s_top10Open; app::requestUpdate(); });
     MiniButton(ui, "hd.theme", w - 136.0f, by, 108.0f, bh,
                g_lightMode ? "深色模式" : "浅色模式", false, ToggleTheme);
@@ -194,22 +335,40 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
 }
 
 void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
+    EnsureLayoutPrefs();
     const float top = ContentTop();
-    // Top 10 侧栏开启且窗口足够宽时右侧预留；窄窗口自动隐藏侧栏
+    // 右侧按键列表开启且窗口足够宽时预留；窄窗口自动隐藏
     const bool rail = s_top10Open && screen.width >= 1000.0f;
-    const float railW = rail ? Px(250.0f) : 0.0f;
+    const float railW = rail ? Px(226.0f) * s_listScale + Px(38.0f) : 0.0f;
     const float availW = screen.width - railW - Px(56.0f);
     const float availH = screen.height - top - Px(70.0f);
-    float u = std::min(availW / 24.0f, availH / 6.0f);
-    u = std::clamp(u, 24.0f, 80.0f);   // 随窗口缩放，仅保留可用性下限
-    const float kx = (screen.width - railW - u * 24.0f) * 0.5f;
+    const float mouseW = Px(76.0f) * s_mouseScale;
+    const float mouseH = Px(126.0f) * s_mouseScale;
+    const float mouseGap = Px(26.0f);
+
+    // 键盘单位：随可用空间自适应，再乘用户系数（指示器无极调节）
+    auto fitUnit = [](float w, float h) {
+        if (w <= 0.0f || h <= 0.0f) return 0.0f;
+        return std::clamp(std::min(w / 24.0f, h / 6.0f) * s_kbScale, Px(11.0f), Px(80.0f));
+    };
+    // 先尝试鼠标并排在键盘右侧；键盘被压得太小则把鼠标放到键盘下方
+    float u = fitUnit(availW - mouseW - mouseGap, availH);
+    const bool sideBySide = u >= Px(22.0f);
+    if (!sideBySide) u = fitUnit(availW, availH - mouseH - mouseGap);
+    if (u <= Px(11.0f) && availH <= mouseH + mouseGap) u = fitUnit(availW, availH);   // 高度极窄
+    u = std::max(u, Px(9.0f));
+
+    const float kbW = u * 24.0f, kbH = u * 6.0f;
+    const float totalW = kbW + (sideBySide ? mouseGap + mouseW : 0.0f);
+    const float kx = std::max(Px(14.0f), (screen.width - railW - totalW) * 0.5f);
     const float ky = top + Px(12.0f);
     const float gap = 2.0f;
 
     // 键盘面板底
+    const float px = kx - Px(14.0f), py = ky - Px(14.0f);
+    const float pw = kbW + Px(28.0f), ph = kbH + Px(28.0f);
     ui.rect("heat.panel")
-        .x(kx - Px(14.0f)).y(ky - Px(14.0f))
-        .size(u * 24.0f + Px(28.0f), u * 6.0f + Px(28.0f))
+        .x(px).y(py).size(pw, ph)
         .color(g_theme.panel)
         .radius(Px(12.0f))
         .border(1.0f, g_theme.border)
@@ -224,10 +383,20 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         DrawKeycap(ui, i, kx + k.x * u + gap, ky + k.y * u + gap,
                    k.w * u - gap * 2.0f, k.h * u - gap * 2.0f, c, t);
     }
+    // 键盘盒尺寸指示器（右下角外侧）
+    ResizeHandle(ui, "heat.handle", px + pw + Px(5.0f), py + ph + Px(5.0f),
+                 &s_kbScale, 0.35f, 2.0f, "kb");
 
-    // 图例：8 段渐变
-    const float ly = ky + u * 6.0f + Px(22.0f);
-    const float lx = kx + u * 24.0f - 8.0f * Px(22.0f) - Px(46.0f);
+    // 鼠标：并排在右侧，或放到键盘下方
+    const float mx = sideBySide ? (kx + kbW + mouseGap) : (kx + (kbW - mouseW) * 0.5f);
+    const float my = sideBySide ? (ky + kbH - mouseH) : (ky + kbH + mouseGap);
+    DrawMousePanel(ui, mx, my, mouseW, mouseH);
+    ResizeHandle(ui, "mouse.handle", mx + mouseW + Px(5.0f), my + mouseH + Px(5.0f),
+                 &s_mouseScale, 0.4f, 3.0f, "mouse");
+
+    // 图例：8 段渐变（放在最下方元素之下）
+    const float ly = (sideBySide ? (ky + kbH) : (my + mouseH)) + Px(26.0f);
+    const float lx = kx + kbW - 8.0f * Px(22.0f) - Px(46.0f);
     ui.text("legend.lo")
         .x(lx - Px(34.0f)).y(ly - Px(4.0f)).size(Px(32.0f), Px(20.0f))
         .text("少").fontSize(Px(16.0f)).lineHeight(Px(20.0f))
@@ -248,76 +417,98 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 }
 
-// Top 10 侧栏：右侧面板，头部带"收起"按钮（开启状态由 s_top10Open 控制）
-void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
+// 右侧按键列表：全部有记录的按键（含鼠标/滚轮）按次数降序，内容超出高度即自动出滚动条
+void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
     if (!(s_top10Open && screen.width >= 1000.0f)) return;
+    EnsureLayoutPrefs();
 
-    const float x = screen.width - Px(250.0f);
+    const float w = Px(226.0f) * s_listScale;
+    const float x = screen.width - Px(24.0f) - w;
     const float y = ContentTop();
-    const float w = Px(226.0f);
     const float h = screen.height - y - Px(24.0f);
 
-    ui.rect("top.panel")
+    ui.rect("list.panel")
         .x(x).y(y).size(w, h)
         .color(g_theme.panel)
         .radius(Px(12.0f))
         .border(1.0f, g_theme.border)
         .build();
-    ui.text("top.title")
+    ui.text("list.title")
         .x(x + Px(16.0f)).y(y + Px(14.0f)).size(w - Px(96.0f), Px(26.0f))
-        .text("Top 10")
+        .text("按键计数")
         .fontSize(Px(20.0f)).lineHeight(Px(24.0f))
         .color(g_theme.text)
         .build();
-    MiniButton(ui, "top.collapse", x + w - Px(76.0f), y + Px(10.0f), Px(60.0f), Px(30.0f),
+    MiniButton(ui, "list.collapse", x + w - Px(76.0f), y + Px(10.0f), Px(60.0f), Px(30.0f),
                "收起", false, [] { s_top10Open = false; app::requestUpdate(); });
 
-    float rowY = y + Px(50.0f);
-    const float rowH = std::min(Px(34.0f), (h - Px(64.0f)) / 10.0f);
-    const int n = (int)g_keyHist.size();
-    const int start = std::max(0, n - 10);
-    int rank = n - start;   // 升序数组的末尾即最大值，倒序输出
-    for (int i = n - 1; i >= start; --i) {
-        const TopEntry& e = g_keyHist[(size_t)i];
-        std::string id = "top.row." + std::to_string(rank);
-        ui.text(id + ".name")
-            .x(x + Px(16.0f)).y(rowY).size(w * 0.55f, rowH)
-            .text(std::to_string(rank) + ". " + e.name)
-            .fontSize(Px(17.0f)).lineHeight(rowH)
-            .color(g_theme.text)
-            .build();
-        ui.text(id + ".count")
-            .x(x + w * 0.55f).y(rowY).size(w - w * 0.55f - Px(16.0f), rowH)
-            .text(WithCommas(e.count))
-            .fontSize(Px(17.0f)).lineHeight(rowH)
-            .color(g_theme.textMut)
-            .horizontalAlign(core::HorizontalAlign::Right)
-            .build();
-        ui.rect(id + ".bar.bg")
-            .x(x + Px(16.0f)).y(rowY + rowH - Px(4.0f))
-            .size(w - Px(32.0f), 2.0f)
-            .color(g_theme.idleEdge)
-            .radius(1.0f)
-            .build();
-        ui.rect(id + ".bar")
-            .x(x + Px(16.0f)).y(rowY + rowH - Px(4.0f))
-            .size((w - Px(32.0f)) * e.frac, 2.0f)
-            .color(g_theme.selected)
-            .radius(1.0f)
-            .transition(Motion())
-            .animate(core::AnimProperty::Frame)
-            .build();
-        rowY += rowH + Px(4.0f);
-        --rank;
-    }
-    if (g_keyHist.empty()) {
-        ui.text("top.empty")
-            .x(x + Px(16.0f)).y(rowY).size(w - Px(32.0f), Px(24.0f))
-            .text("暂无数据，去打几个字吧")
-            .fontSize(Px(14.0f)).lineHeight(Px(20.0f))
-            .color(g_theme.textMut)
-            .build();
-    }
+    const float listX = x + Px(12.0f);
+    const float listY = y + Px(48.0f);
+    const float listW = w - Px(24.0f);
+    const float listH = h - Px(60.0f);
+    const float rowH = Px(30.0f);
+
+    components::scrollView(ui, "list.scroll")
+        .x(listX).y(listY)
+        .size(listW, listH)
+        .gap(Px(4.0f))
+        .step(rowH)
+        .scrollbarWidth(Px(8.0f))
+        .scrollbarGap(Px(4.0f))
+        .theme(CurrentTheme())
+        .transition(Motion())
+        .content([&](core::dsl::Ui& cui, float contentW, float) {
+            if (g_keyHist.empty()) {
+                cui.text("list.empty")
+                    .size(contentW, Px(24.0f))
+                    .text("暂无数据，去打几个字吧")
+                    .fontSize(Px(14.0f)).lineHeight(Px(20.0f))
+                    .color(g_theme.textMut)
+                    .build();
+                return;
+            }
+            const int cnt = (int)g_keyHist.size();
+            for (int k = 0; k < cnt; ++k) {
+                const TopEntry& e = g_keyHist[(size_t)(cnt - 1 - k)];   // 降序
+                const int rank = k + 1;
+                const std::string id = "list.row." + std::to_string(rank);
+                cui.stack(id)
+                    .size(contentW, rowH)
+                    .content([&] {
+                        cui.text(id + ".name")
+                            .x(0.0f).y(0.0f).size(contentW * 0.62f, rowH)
+                            .text(std::to_string(rank) + ". " + e.name)
+                            .fontSize(Px(16.0f)).lineHeight(rowH)
+                            .color(g_theme.text)
+                            .build();
+                        cui.text(id + ".count")
+                            .x(contentW * 0.62f).y(0.0f).size(contentW * 0.38f, rowH)
+                            .text(WithCommas(e.count))
+                            .fontSize(Px(16.0f)).lineHeight(rowH)
+                            .color(g_theme.textMut)
+                            .horizontalAlign(core::HorizontalAlign::Right)
+                            .build();
+                        cui.rect(id + ".bar.bg")
+                            .x(0.0f).y(rowH - Px(4.0f))
+                            .size(contentW, 2.0f)
+                            .color(g_theme.idleEdge)
+                            .radius(1.0f)
+                            .build();
+                        cui.rect(id + ".bar")
+                            .x(0.0f).y(rowH - Px(4.0f))
+                            .size(contentW * e.frac, 2.0f)
+                            .color(g_theme.selected)
+                            .radius(1.0f)
+                            .build();
+                    })
+                    .build();
+            }
+        })
+        .build();
+
+    // 列表宽度指示器（右下角外侧）
+    ResizeHandle(ui, "list.handle", x + w + Px(5.0f), y + h + Px(5.0f),
+                 &s_listScale, 0.6f, 2.0f, "list");
 }
 
 // 按键使用次数直方图：升序（左低右高），几何/字号/交互与上方 barChart 保持一致

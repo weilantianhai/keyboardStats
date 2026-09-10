@@ -50,13 +50,24 @@ inline constexpr KeyDef kKeys[] = {
     {0x2E, 15.5f,2,1,1, L"Del"},   {0x23, 16.5f,2,1,1, L"End"},   {0x22, 17.5f,2,1,1, L"PgDn"},
     {0x26, 16.5f,4,1,1, L"↑"},
     {0x25, 15.5f,5,1,1, L"←"},     {0x28, 16.5f,5,1,1, L"↓"},     {0x27, 17.5f,5,1,1, L"→"},
-    // ── 小键盘 ──
-    {0x90, 19.5f,0,1,1, L"Num"},  {0x6F, 20.5f,0,1,1, L"/"},   {0x6A, 21.5f,0,1,1, L"*"},  {0x6D, 22.5f,0,1,1, L"-"},
-    {0x67, 19.5f,1,1,1, L"7"},    {0x68, 20.5f,1,1,1, L"8"},   {0x69, 21.5f,1,1,1, L"9"},  {0x6B, 22.5f,1,1,2, L"+"},
-    {0x64, 19.5f,2,1,1, L"4"},    {0x65, 20.5f,2,1,1, L"5"},   {0x66, 21.5f,2,1,1, L"6"},
-    {0x61, 19.5f,3,1,1, L"1"},    {0x62, 20.5f,3,1,1, L"2"},   {0x63, 21.5f,3,1,1, L"3"},  {0x0D, 22.5f,3,1,2, L"Enter"},
-    {0x60, 19.5f,4,2,1, L"0"},    {0x6E, 21.5f,4,1,1, L"."},
+    // ── 小键盘（整体下移一行，使数字区最底部与主键区最底部对齐）──
+    {0x90, 19.5f,1,1,1, L"Num"},  {0x6F, 20.5f,1,1,1, L"/"},   {0x6A, 21.5f,1,1,1, L"*"},  {0x6D, 22.5f,1,1,1, L"-"},
+    {0x67, 19.5f,2,1,1, L"7"},    {0x68, 20.5f,2,1,1, L"8"},   {0x69, 21.5f,2,1,1, L"9"},  {0x6B, 22.5f,2,1,2, L"+"},
+    {0x64, 19.5f,3,1,1, L"4"},    {0x65, 20.5f,3,1,1, L"5"},   {0x66, 21.5f,3,1,1, L"6"},
+    {0x61, 19.5f,4,1,1, L"1"},    {0x62, 20.5f,4,1,1, L"2"},   {0x63, 21.5f,4,1,1, L"3"},  {0x0D, 22.5f,4,1,2, L"Enter"},
+    {0x60, 19.5f,5,2,1, L"0"},    {0x6E, 21.5f,5,1,1, L"."},
 };
+
+// 鼠标按键与滚轮使用独立的伪键码（记录在同一张 counts[256] 表里）
+inline constexpr uint8_t kMouseLeft = 0x01;
+inline constexpr uint8_t kMouseRight = 0x02;
+inline constexpr uint8_t kMouseMiddle = 0x04;
+inline constexpr uint8_t kMouseX1 = 0x05;
+inline constexpr uint8_t kMouseX2 = 0x06;
+inline constexpr uint8_t kWheelUp = 0xE0;
+inline constexpr uint8_t kWheelDown = 0xE1;
+inline constexpr uint8_t kWheelLeft = 0xE2;
+inline constexpr uint8_t kWheelRight = 0xE3;
 
 inline constexpr int kKeyCount = sizeof(kKeys) / sizeof(kKeys[0]);
 
@@ -93,9 +104,9 @@ inline const wchar_t* StatName(uint8_t vk) {
         static const wchar_t* d[10] = { L"0",L"1",L"2",L"3",L"4",L"5",L"6",L"7",L"8",L"9" };
         return d[vk - '0'];
     }
-    if (vk >= 0x60 && vk <= 0x69) {           // 小键盘数字
-        static const wchar_t* n[10] = { L"小键盘0",L"小键盘1",L"小键盘2",L"小键盘3",L"小键盘4",
-                                        L"小键盘5",L"小键盘6",L"小键盘7",L"小键盘8",L"小键盘9" };
+    if (vk >= 0x60 && vk <= 0x69) {           // 小键盘数字：加 ` 后缀与主键区数字区分
+        static const wchar_t* n[10] = { L"0`",L"1`",L"2`",L"3`",L"4`",
+                                        L"5`",L"6`",L"7`",L"8`",L"9`" };
         return n[vk - 0x60];
     }
     switch (vk) {
@@ -103,6 +114,15 @@ inline const wchar_t* StatName(uint8_t vk) {
         case 0xA2: case 0xA3: return L"Ctrl";
         case 0xA4: case 0xA5: return L"Alt";
         case 0x5B: case 0x5C: return L"Win";
+        case kMouseLeft:   return L"鼠标左键";
+        case kMouseRight:  return L"鼠标右键";
+        case kMouseMiddle: return L"鼠标中键";
+        case kMouseX1:     return L"鼠标侧键1";
+        case kMouseX2:     return L"鼠标侧键2";
+        case kWheelUp:     return L"滚轮上";
+        case kWheelDown:   return L"滚轮下";
+        case kWheelLeft:   return L"滚轮左";
+        case kWheelRight:  return L"滚轮右";
     }
     return nullptr;
 }

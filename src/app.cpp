@@ -304,7 +304,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             DrawControls(ui, screen);
             if (g_page == 0) {
                 DrawHeatPage(ui, screen);
-                DrawTop10(ui, screen);
+                DrawKeyList(ui, screen);
             } else if (g_page == 1) {
                 DrawHistPage(ui, screen);
             } else {
