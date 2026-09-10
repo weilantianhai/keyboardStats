@@ -93,5 +93,11 @@ tests/                 数据层与注册表逻辑的独立测试程序
    变化（设置页字体滑块 / 窗口宽度自适应）会把页面写满，之后新字形永久缺失、文字错乱。
    现在写满时清空该页并递增“图集重置版本号”，`TextPrimitive::Impl::prepare()` 检测到版本
    变化即丢弃失效 UV 并重建字形。
+3. `components/datepicker.h` → 滚轮列改为累积滚动距离（约 0.30 行高推进一行），避免高分辨率
+   滚轮一次滚动跳过大量日期。
+4. `core/app/glfw_app_main.cpp` → 拖动窗口边框时实时重绘：Windows 的模态缩放循环嵌套在
+   `glfwWaitEvents` 内，主循环无法出帧，原实现只在松手后更新。现在把「更新+渲染一帧」提取
+   为 `renderOnce` 并通过 `g_liveResizeRender` 暴露给 framebuffer-size / window-refresh
+   回调：回调发现 framebuffer 尺寸与上次渲染不同就立即出帧（带重入保护与首帧保护）。
 
 旧纯 Win32/GDI 版本（`gui.cpp/main.cpp`）已被 EUI-NEO 版本取代并移除。
