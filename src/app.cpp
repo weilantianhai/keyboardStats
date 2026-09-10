@@ -29,25 +29,73 @@ core::Color Hex(unsigned rgb, float a = 1.0f) {
             (rgb & 0xFF) / 255.0f, a};
 }
 
-const core::Color kBg        = Hex(0x0B0C10);   // 页面背景（近黑）
-const core::Color kPanel     = Hex(0x141822);   // 卡片/面板
-const core::Color kPanelHi   = Hex(0x1B2130);   // 卡片悬停
-const core::Color kText      = Hex(0xE5E9F0);   // 主文本（对比度 ~15:1）
-const core::Color kTextMut   = Hex(0x8A93A6);   // 次文本
-const core::Color kBorder    = Hex(0x272D3B);
-const core::Color kBrand     = Hex(0x1E40AF);   // uiux Primary
-const core::Color kSelected  = Hex(0x2563EB);   // 控件选中色（白字对比 4.5:1）
-const core::Color kAccent    = Hex(0xD97706);   // uiux Accent
-const core::Color kIdleKey   = Hex(0x232A3A);   // 无按键键帽
-const core::Color kIdleEdge  = Hex(0x323A4E);   // 无按键键帽描边
-const core::Color kHeatLo    = Hex(0x313695);   // 热度下限（蓝）
-const core::Color kHeatMid   = Hex(0xF0DC78);   // 热度中点（黄）
-const core::Color kHeatHi    = Hex(0xB2182B);   // 热度上限（红）
+// ────────────────── 主题令牌（深 / 浅两套，运行时可切换） ──────────────────
+
+struct UiTheme {
+    core::Color bg;         // 页面背景
+    core::Color panel;      // 卡片/面板
+    core::Color panelHi;    // 卡片悬停
+    core::Color panelActive;// 卡片按下
+    core::Color text;       // 主文本
+    core::Color textMut;    // 次文本
+    core::Color border;
+    core::Color brand;      // uiux Primary
+    core::Color selected;   // 控件选中色
+    core::Color accent;     // uiux Accent
+    core::Color idleKey;    // 无按键键帽
+    core::Color idleEdge;   // 无按键键帽描边
+    core::Color heatLo;     // 热度下限（蓝）
+    core::Color heatMid;    // 热度中点（黄）
+    core::Color heatHi;     // 热度上限（红）
+};
+
+UiTheme DarkThemeTokens() {
+    UiTheme t;
+    t.bg         = Hex(0x0B0C10);
+    t.panel      = Hex(0x141822);
+    t.panelHi    = Hex(0x1B2130);
+    t.panelActive= Hex(0x232B3E);
+    t.text       = Hex(0xE5E9F0);   // 对比度 ~15:1
+    t.textMut    = Hex(0x8A93A6);
+    t.border     = Hex(0x272D3B);
+    t.brand      = Hex(0x1E40AF);
+    t.selected   = Hex(0x2563EB);   // 白字对比 4.5:1
+    t.accent     = Hex(0xD97706);
+    t.idleKey    = Hex(0x232A3A);
+    t.idleEdge   = Hex(0x323A4E);
+    t.heatLo     = Hex(0x313695);
+    t.heatMid    = Hex(0xF0DC78);
+    t.heatHi     = Hex(0xB2182B);
+    return t;
+}
+
+UiTheme LightThemeTokens() {
+    UiTheme t;
+    t.bg         = Hex(0xF2F4F8);
+    t.panel      = Hex(0xFFFFFF);
+    t.panelHi    = Hex(0xEEF2F8);
+    t.panelActive= Hex(0xE3EAF4);
+    t.text       = Hex(0x1F2430);   // 对比度 ~14:1
+    t.textMut    = Hex(0x5B6472);
+    t.border     = Hex(0xD8DEE9);
+    t.brand      = Hex(0x1E40AF);
+    t.selected   = Hex(0x2563EB);   // 白字对比 4.5:1
+    t.accent     = Hex(0xB45309);   // 深琥珀：浅底可读性更好
+    t.idleKey    = Hex(0xE6EAF2);
+    t.idleEdge   = Hex(0xC9D2E0);
+    t.heatLo     = Hex(0x313695);   // 热度梯度两套主题保持一致
+    t.heatMid    = Hex(0xF0DC78);
+    t.heatHi     = Hex(0xB2182B);
+    return t;
+}
+
+UiTheme g_theme = DarkThemeTokens();
+bool g_lightMode = false;
 
 core::Color HeatColor(double t) {
-    if (t <= 0.0) return kIdleKey;
+    if (t <= 0.0) return g_theme.idleKey;
     struct Stop { double t; core::Color c; };
-    static const Stop kStops[] = {{0.0, kHeatLo}, {0.5, kHeatMid}, {1.0, kHeatHi}};
+    const Stop kStops[] = {{0.0, g_theme.heatLo}, {0.5, g_theme.heatMid}, {1.0, g_theme.heatHi}};
     for (int i = 0; i < 2; ++i) {
         if (t <= kStops[i + 1].t) {
             double k = (t - kStops[i].t) / (kStops[i + 1].t - kStops[i].t);
@@ -57,21 +105,65 @@ core::Color HeatColor(double t) {
                     lerp(kStops[i].c.b, kStops[i + 1].c.b), 1.0f};
         }
     }
-    return kHeatHi;
+    return g_theme.heatHi;
 }
 
 components::theme::ThemeColorTokens AppTheme() {
-    auto t = components::theme::dark();
-    t.background = kBg;
-    t.surface = kPanel;
-    t.surfaceHover = kPanelHi;
-    t.surfaceActive = Hex(0x232B3E);
-    t.text = kText;
-    t.border = kBorder;
-    t.primary = kSelected;
+    auto t = g_lightMode ? components::theme::light() : components::theme::dark();
+    t.background    = g_theme.bg;
+    t.surface       = g_theme.panel;
+    t.surfaceHover  = g_theme.panelHi;
+    t.surfaceActive = g_theme.panelActive;
+    t.text          = g_theme.text;
+    t.border        = g_theme.border;
+    t.primary       = g_theme.selected;
     return t;
 }
-const components::theme::ThemeColorTokens kTheme = AppTheme();
+components::theme::ThemeColorTokens CurrentTheme() { return AppTheme(); }
+
+// ────────────────── 主题偏好持久化 + 系统默认 ──────────────────
+
+std::wstring ThemePrefPath() {
+    wchar_t custom[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"KEYBOARDSTATS_DIR", custom, MAX_PATH) > 0) {
+        return std::wstring(custom) + L"\\ui-theme.txt";
+    }
+    wchar_t appdata[MAX_PATH] = {};
+    GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
+    return std::wstring(appdata) + L"\\KeyboardStats\\ui-theme.txt";
+}
+
+void SaveThemePref(bool light) {
+    FILE* f = _wfopen(ThemePrefPath().c_str(), L"wb");
+    if (f) { fputs(light ? "light" : "dark", f); fclose(f); }
+}
+
+void LoadThemePref() {
+    FILE* f = _wfopen(ThemePrefPath().c_str(), L"rb");
+    if (f) {
+        char buf[16] = {};
+        size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        buf[n] = 0;
+        g_lightMode = strstr(buf, "light") != nullptr;
+    } else {
+        // 无保存偏好：跟随系统（AppsUseLightTheme：1=浅色）
+        DWORD v = 0, size = sizeof(v);
+        if (RegGetValueW(HKEY_CURRENT_USER,
+                         L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                         L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &v, &size) == ERROR_SUCCESS) {
+            g_lightMode = v == 1;
+        }
+    }
+    g_theme = g_lightMode ? LightThemeTokens() : DarkThemeTokens();
+}
+
+void ToggleTheme() {
+    g_lightMode = !g_lightMode;
+    g_theme = g_lightMode ? LightThemeTokens() : DarkThemeTokens();
+    SaveThemePref(g_lightMode);
+    app::requestUpdate();
+}
 core::Transition Motion() { return core::Transition::make(0.18f, core::Ease::OutCubic); }
 
 // ────────────────── 运行状态（GLFW 主线程单线程访问） ──────────────────
@@ -238,14 +330,14 @@ void EnsureUiServices() {
 void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
                 float w, float h, const std::string& label, bool accent,
                 std::function<void()> onClick) {
-    core::Color base  = accent ? kSelected : kPanel;
-    core::Color hover = accent ? Hex(0x3B82F6) : kPanelHi;
-    core::Color press = accent ? Hex(0x1D4ED8) : Hex(0x232B3E);
+    core::Color base  = accent ? g_theme.selected : g_theme.panel;
+    core::Color hover = accent ? Hex(0x3B82F6) : g_theme.panelHi;
+    core::Color press = accent ? Hex(0x1D4ED8) : g_theme.panelActive;
     ui.rect(id + ".bg")
         .x(x).y(y).size(w, h)
         .states(base, hover, press)
         .radius(8.0f)
-        .border(1.0f, accent ? core::Color{0, 0, 0, 0} : kBorder)
+        .border(1.0f, accent ? core::Color{0, 0, 0, 0} : g_theme.border)
         .onClick(std::move(onClick))
         .transition(Motion())
         .animate(core::AnimProperty::Color)
@@ -255,7 +347,7 @@ void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
         .text(label)
         .fontSize(13.0f)
         .lineHeight(13.0f)
-        .color(accent ? Hex(0xFFFFFF) : kText)
+        .color(accent ? Hex(0xFFFFFF) : g_theme.text)
         .horizontalAlign(core::HorizontalAlign::Center)
         .verticalAlign(core::VerticalAlign::Center)
         .build();
@@ -266,15 +358,17 @@ void DrawHeader(core::dsl::Ui& ui, float w) {
         .x(28.0f).y(18.0f).size(w - 56.0f, 34.0f)
         .text("KeyboardStats 键盘热力统计")
         .fontSize(26.0f).lineHeight(32.0f)
-        .color(kText)
+        .color(g_theme.text)
         .build();
     std::string sub = "共 " + WithCommas(g_stats.total) + " 次按键 · " + g_rangeText;
     ui.text("hd.sub")
         .x(28.0f).y(56.0f).size(w - 56.0f, 24.0f)
         .text(sub)
         .fontSize(14.0f).lineHeight(20.0f)
-        .color(kTextMut)
+        .color(g_theme.textMut)
         .build();
+    MiniButton(ui, "hd.theme", w - 122.0f, 22.0f, 94.0f, 28.0f,
+               g_lightMode ? "深色模式" : "浅色模式", false, ToggleTheme);
 }
 
 void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
@@ -288,7 +382,7 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
                 .size(200.0f, h)
                 .items({"热力图", "直方图"})
                 .selected(g_page)
-                .theme(kTheme)
+                .theme(CurrentTheme())
                 .transition(Motion())
                 .onChange([](int v) { g_page = v; app::requestUpdate(); })
                 .build();
@@ -302,7 +396,7 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
                 .size(380.0f, h)
                 .items({"今天", "最近 7 天", "最近 30 天", "全部"})
                 .selected(g_rangeMode <= 3 ? g_rangeMode : 3)
-                .theme(kTheme)
+                .theme(CurrentTheme())
                 .transition(Motion())
                 .onChange([](int v) { g_rangeMode = v; FetchStats(); app::requestUpdate(); })
                 .build();
@@ -335,7 +429,7 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         .screen(screen.width, screen.height)
         .date((int)(g_pendingFrom / 10000), (int)(g_pendingFrom / 100 % 100), (int)(g_pendingFrom % 100))
         .bindOpen(g_fromOpen)
-        .theme(kTheme)
+        .theme(CurrentTheme())
         .zIndex(600)
         .onChange([](int y, int m, int d) { g_pendingFrom = YmdOf(y, m, d); app::requestUpdate(); })
         .build();
@@ -343,7 +437,7 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
         .screen(screen.width, screen.height)
         .date((int)(g_pendingTo / 10000), (int)(g_pendingTo / 100 % 100), (int)(g_pendingTo % 100))
         .bindOpen(g_toOpen)
-        .theme(kTheme)
+        .theme(CurrentTheme())
         .zIndex(600)
         .onChange([](int y, int m, int d) { g_pendingTo = YmdOf(y, m, d); app::requestUpdate(); })
         .build();
@@ -353,14 +447,14 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
                 long count, double t) {
     const std::string id = "key." + std::to_string(idx);
     core::Color fill = HeatColor(t);
-    core::Color edge = count > 0 ? core::Color{0, 0, 0, 0} : kIdleEdge;
+    core::Color edge = count > 0 ? core::Color{0, 0, 0, 0} : g_theme.idleEdge;
     ui.rect(id)
         .x(x).y(y).size(w, h)
         .color(fill)
         .radius(std::min(8.0f, h * 0.28f))
         .border(1.0f, edge)
         .states(fill,
-                count > 0 ? core::mixColor(fill, Hex(0xFFFFFF), 0.10f) : kPanelHi,
+                count > 0 ? core::mixColor(fill, Hex(0xFFFFFF), 0.10f) : g_theme.panelHi,
                 count > 0 ? core::mixColor(fill, Hex(0xFFFFFF), 0.18f) : Hex(0x2A3245))
         .transition(Motion())
         .animate(core::AnimProperty::Color)
@@ -374,7 +468,7 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
             .text(Utf8(cap))
             .fontSize(std::min(16.0f, std::max(8.0f, h * 0.30f)))
             .lineHeight(std::min(16.0f, std::max(8.0f, h * 0.30f)))
-            .color(count > 0 ? Hex(0xFFFFFF) : kTextMut)
+            .color(count > 0 ? Hex(0xFFFFFF) : g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Center)
             .verticalAlign(core::VerticalAlign::Center)
             .build();
@@ -410,9 +504,9 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     ui.rect("heat.panel")
         .x(kx - 14.0f).y(ky - 14.0f)
         .size(u * 24.0f + 28.0f, u * 6.0f + 28.0f)
-        .color(kPanel)
+        .color(g_theme.panel)
         .radius(12.0f)
-        .border(1.0f, kBorder)
+        .border(1.0f, g_theme.border)
         .build();
 
     const int n = (int)(sizeof(kKeys) / sizeof(kKeys[0]));
@@ -431,7 +525,7 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     ui.text("legend.lo")
         .x(lx - 30.0f).y(ly - 2.0f).size(28.0f, 16.0f)
         .text("少").fontSize(12.0f).lineHeight(16.0f)
-        .color(kTextMut).horizontalAlign(core::HorizontalAlign::Right)
+        .color(g_theme.textMut).horizontalAlign(core::HorizontalAlign::Right)
         .build();
     for (int i = 0; i < 8; ++i) {
         ui.rect("legend.sw." + std::to_string(i))
@@ -444,7 +538,7 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     ui.text("legend.hi")
         .x(lx + 8 * 22.0f + 4.0f).y(ly - 2.0f).size(24.0f, 16.0f)
         .text("多").fontSize(12.0f).lineHeight(16.0f)
-        .color(kTextMut)
+        .color(g_theme.textMut)
         .build();
 }
 
@@ -456,15 +550,15 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
 
     ui.rect("top.panel")
         .x(x).y(y).size(w, h)
-        .color(kPanel)
+        .color(g_theme.panel)
         .radius(12.0f)
-        .border(1.0f, kBorder)
+        .border(1.0f, g_theme.border)
         .build();
     ui.text("top.title")
         .x(x + 16.0f).y(y + 12.0f).size(w - 32.0f, 22.0f)
         .text("Top 10")
         .fontSize(15.0f).lineHeight(20.0f)
-        .color(kText)
+        .color(g_theme.text)
         .build();
 
     float rowY = y + 44.0f;
@@ -476,13 +570,13 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
             .x(x + 16.0f).y(rowY).size(w * 0.55f, rowH)
             .text(std::to_string(rank) + ". " + e.name)
             .fontSize(12.0f).lineHeight(rowH)
-            .color(kText)
+            .color(g_theme.text)
             .build();
         ui.text(id + ".count")
             .x(x + w * 0.55f).y(rowY).size(w - w * 0.55f - 16.0f, rowH)
             .text(WithCommas(e.count))
             .fontSize(12.0f).lineHeight(rowH)
-            .color(kTextMut)
+            .color(g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Right)
             .build();
         ui.rect(id + ".bar.bg")
@@ -494,7 +588,7 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
         ui.rect(id + ".bar")
             .x(x + 16.0f).y(rowY + rowH - 4.0f)
             .size((w - 32.0f) * e.frac, 2.0f)
-            .color(kSelected)
+            .color(g_theme.selected)
             .radius(1.0f)
             .transition(Motion())
             .animate(core::AnimProperty::Frame)
@@ -507,7 +601,7 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
             .x(x + 16.0f).y(rowY).size(w - 32.0f, 24.0f)
             .text("暂无数据，去打几个字吧")
             .fontSize(12.0f).lineHeight(20.0f)
-            .color(kTextMut)
+            .color(g_theme.textMut)
             .build();
     }
 }
@@ -528,7 +622,7 @@ void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen) {
                 .title(g_rangeText)
                 .values(g_barVals)
                 .labels(g_barLabels)
-                .theme(kTheme)
+                .theme(CurrentTheme())
                 .transition(Motion())
                 .build();
         })
@@ -557,6 +651,8 @@ const DslAppConfig& dslAppConfig() {
             StorageFlushNow();
         });
 
+        LoadThemePref();   // 先于 config 求值，clearColor 才能拿到正确的主题底色
+
         g_startHidden = wcsstr(GetCommandLineW(), L"--background") != nullptr;
         return true;
     }();
@@ -565,7 +661,7 @@ const DslAppConfig& dslAppConfig() {
     static const DslAppConfig config = DslAppConfig{}
         .title("KeyboardStats 键盘热力统计")
         .pageId("kbstats")
-        .clearColor({kBg.r, kBg.g, kBg.b, 1.0f})
+        .clearColor({g_theme.bg.r, g_theme.bg.g, g_theme.bg.b, 1.0f})
         .windowSize(1180, 720)
         .fps(60.0)
         .iconPath(AssetAbs("icon.png"))
@@ -589,6 +685,10 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
     ui.stack("root")
         .size(screen.width, screen.height)
         .content([&] {
+            ui.rect("root.bg")
+                .size(screen.width, screen.height)
+                .color(g_theme.bg)
+                .build();
             DrawHeader(ui, screen.width);
             DrawControls(ui, screen);
             if (g_page == 0) {
@@ -604,6 +704,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
 }
 
 } // namespace app
+
 
 
 
