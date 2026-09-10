@@ -149,8 +149,21 @@ static bool StatsDiffer(const RangeStats& a, const RangeStats& b) {
 // 周期任务：驱动落盘 + 数据节流刷新（单线程）
 static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     StorageFlushIfDue();
-    // 记录进程每 5 秒落盘，GUI 这里增量同步（文件没变时开销≈0）
-    if (!g_selfRecording) StorageReloadIfChanged();
+
+    // 兜底自记录的善后：若记录进程只是启动慢（EnsureRecorderRunning 超时误判），
+    // 它一起来就立刻卸掉自己的钩子，避免双钩子把同样的按键记两遍。
+    if (g_selfRecording) {
+        if (HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, kIpcRecorderMutex)) {
+            CloseHandle(m);
+            RemoveHook();
+            StorageFlushNow();     // 兜底期间的数据先落盘
+            g_selfRecording = false;
+            StorageReloadFull();   // 以文件为准重载（可能与记录进程有少量重复，可接受）
+        }
+    } else {
+        // 记录进程每 5 秒落盘，GUI 这里增量同步（文件没变时开销≈0）
+        StorageReloadIfChanged();
+    }
 
     TickFontScale(GetTickCount64() / 1000.0);   // 字号滑块：值稳定后才应用
 
