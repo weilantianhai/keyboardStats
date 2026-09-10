@@ -13,8 +13,8 @@ float g_uiScale = 1.0f;
 bool  g_fontAuto = true;
 float g_fontCustom = 1.25f;
 
-// 待生效的自定义值（滑块拖动中）：稳定 400ms 后才真正应用
-static float  s_pendingCustom = 1.25f;
+// 待落盘标记（滑块拖动中）：数值立即生效，文件写入等稳定后再做
+static bool   s_persistPending = false;
 static double s_pendingSince = 0.0;
 
 // 量化到 0.05 步长：框架字形缓冲（图集）只有一页，字号种类越多越快写满，
@@ -38,27 +38,29 @@ void SetFontAuto(bool value) {
     PrefSetValue(L"ui-font.txt", "auto", value ? "1" : "0");
 }
 
-static void ApplyFontCustom(float value) {
-    g_fontCustom = Quantize(value);
+static void PersistFontCustom() {
     char buf[32];
     snprintf(buf, sizeof(buf), "%.2f", g_fontCustom);
     PrefSetValue(L"ui-font.txt", "scale", buf);
 }
 
+// 滑块入口：量化后立即生效（拖动跟手）；落盘交由 TickFontScale 防抖
 void RequestFontCustom(float value) {
     const float q = Quantize(value);
-    if (std::fabs(q - s_pendingCustom) < 0.001f) return;
-    s_pendingCustom = q;
-    s_pendingSince = 0.0;   // 0 = 需要重新计时
+    if (std::fabs(q - g_fontCustom) < 0.001f) return;
+    g_fontCustom = q;
+    s_persistPending = true;
+    s_pendingSince = 0.0;
 }
 
-float PendingFontCustom() { return s_pendingCustom; }
+float PendingFontCustom() { return g_fontCustom; }
 
 void TickFontScale(double nowSec) {
-    if (s_pendingCustom == g_fontCustom) return;
+    if (!s_persistPending) return;
     if (s_pendingSince == 0.0) { s_pendingSince = nowSec; return; }
-    if (nowSec - s_pendingSince >= 0.4) {   // 拖动停止后再应用，避免中间字号污染字形图集
-        ApplyFontCustom(s_pendingCustom);
+    if (nowSec - s_pendingSince >= 0.4) {   // 拖动停止后写一次文件，避免频繁落盘
+        PersistFontCustom();
+        s_persistPending = false;
         s_pendingSince = 0.0;
     }
 }
@@ -66,7 +68,7 @@ void TickFontScale(double nowSec) {
 void LoadFontPref() {
     g_fontAuto = PrefGetValue(L"ui-font.txt", "auto", "1") != "0";
     g_fontCustom = Quantize((float)atof(PrefGetValue(L"ui-font.txt", "scale", "1.25").c_str()));
-    s_pendingCustom = g_fontCustom;
+    s_persistPending = false;
     s_pendingSince = 0.0;
     UpdateUiScale(1180.0f);   // 首帧前的合理默认（随后每帧按真实宽度刷新）
 }

@@ -23,10 +23,9 @@ void UpdateUiScale(float width);
 
 void SetFontAuto(bool value);
 
-// 滑块入口：只登记待生效值（量化 + 防抖），拖动过程中不产生大量中间字号
+// 滑块入口：量化后立即生效（拖动跟手）；文件写入由 TickFontScale 防抖
 void RequestFontCustom(float value);
-float PendingFontCustom();          // 待生效值（用于界面显示）
-void TickFontScale(double nowSec);  // 由定时器调用：值稳定后应用并持久化
+void TickFontScale(double nowSec);  // 由定时器调用：数值稳定后落盘
 
 void LoadFontPref();
 
