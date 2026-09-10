@@ -162,6 +162,9 @@ static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
 
 static WNDPROC s_origWndProc = nullptr;
 static POINT   s_minTrack = {0, 0};
+// 拖动窗口边框期间为 true：此时冻结字号缩放，避免每个尺寸变化都重建全部字形
+// （重建 ≈ 全量光栅化 + 大图集上传，会让拖动帧率骤降）
+static bool    s_liveResizing = false;
 
 // 布局能容纳的最小客户区（控制行为固定宽度，小于此值会重叠/溢出）
 static const int kMinClientW = 1140;
@@ -173,6 +176,13 @@ static LRESULT CALLBACK MinSizeWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         mmi->ptMinTrackSize.x = s_minTrack.x;
         mmi->ptMinTrackSize.y = s_minTrack.y;
         return 0;
+    }
+    // 拖动/缩放期间冻结字号（松手后再按最终宽度更新一次）
+    if (msg == WM_ENTERSIZEMOVE) {
+        s_liveResizing = true;
+    } else if (msg == WM_EXITSIZEMOVE) {
+        s_liveResizing = false;
+        app::requestUpdate();
     }
     return CallWindowProcW(s_origWndProc, h, msg, wp, lp);
 }
@@ -313,7 +323,11 @@ const DslAppConfig& dslAppConfig() {
 
 void compose(eui::Ui& ui, const eui::Screen& screen) {
     EnsureUiServices();
-    UpdateUiScale(screen.width);   // 字号/控件随窗口宽度缩放（须先于所有 Draw 调用）
+    // 拖动边框期间保持字号缩放不变（宽度仍实时用于布局）：
+    // 否则每个中间宽度都会触发一次全量字形重建，拖动帧率会明显下降。
+    static float s_stableWidth = 0.0f;
+    if (!s_liveResizing || s_stableWidth <= 0.0f) s_stableWidth = screen.width;
+    UpdateUiScale(s_stableWidth);
 
     ui.stack("root")
         .size(screen.width, screen.height)
