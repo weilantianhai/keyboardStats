@@ -84,6 +84,10 @@ void SaveLayoutPref(const char* key, float value) {
 
 // 最近被调节的一方：1=键盘 2=鼠标。被调方保持尺寸，另一方吸收剩余空间。
 int s_resizeDriver = 0;
+// 叠放状态（带滞回，避免拖动尺寸时在并排/叠放间来回跳）
+bool s_heatStacked = false;
+// 按键计数列表的独立筛选：0=键盘 1=鼠标 2=全部 3=分开
+int s_listFilter = 2;
 
 // 内盒右下角外侧的尺寸指示器：按住左键拖动无极调节（松手存档）
 void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
@@ -190,20 +194,11 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
             const float midW = std::max(Px(11.0f), bodyW * 0.19f);
             const float midX = pad + (bodyW - midW) * 0.5f;
             const float keyH = std::max(Px(8.0f), bodyH * 0.13f);
-            // 中键上方 = 滚轮上滑（^），下方 = 下滑（v）
+            // 中键上方 = 滚轮上滑（^），下方 = 下滑（v）——中间不再有额外的方形键
             const float upTop = pad + Px(1.0f);
             button("mouse.wup", kWheelUp, midX, upTop, midW, keyH, 0.35f, "^", 0.7f);
             button("mouse.m", kMouseMiddle, midX, upTop + keyH + Px(2.0f), midW, bodyH * 0.16f, 0.40f);
-            const float wheelY = upTop + keyH + Px(2.0f) + bodyH * 0.16f + Px(2.0f);
-            const float wheelH = std::max(Px(8.0f), bodyH * 0.11f);
-            ui.rect("mouse.wheel")
-                .x(midX + midW * 0.28f).y(wheelY)
-                .size(midW * 0.44f, wheelH)
-                .color(g_theme.panelHi)
-                .radius(midW * 0.2f)
-                .border(1.0f, g_theme.idleEdge)
-                .build();
-            button("mouse.wdown", kWheelDown, midX, wheelY + wheelH + Px(2.0f),
+            button("mouse.wdown", kWheelDown, midX, upTop + keyH + Px(2.0f) + bodyH * 0.16f + Px(2.0f),
                    midW, keyH, 0.35f, "v", 0.7f);
             // 侧键 X1 / X2（机身左侧两条）
             const float sideW = std::max(Px(9.0f), bodyW * 0.15f);
@@ -439,29 +434,46 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
                                     kbMinW, kbMaxW);
     const float totalW = std::max(Px(40.0f), innerW - gapM);
 
-    // 用户设定尺寸（各自最小/最大钳制），并限制不超过盒高
-    float kbWant = std::min(std::clamp(kbRefW * s_kbScale, kbMinW, kbMaxW), innerH * 4.0f);
-    float mouseWant = std::min(std::clamp(mouseRefW * s_mouseScale, mouseMinW, mouseMaxW),
-                               innerH / kMouseAspect);
+    // 用户设定尺寸（各自最小/最大钳制）
+    const float kbWantRaw = std::clamp(kbRefW * s_kbScale, kbMinW, kbMaxW);
+    const float mouseWantRaw = std::clamp(mouseRefW * s_mouseScale, mouseMinW, mouseMaxW);
+
+    // 叠放判定带滞回：让位方到最小值仍放不下才进入；两侧按用户值都能放下（留 10% 余量）才退出。
+    // 这样在叠放状态下拖动某一方不会立刻跳回并排。
+    {
+        const float wantSum = kbWantRaw + gapM + mouseWantRaw;
+        if (!s_heatStacked) {
+            const float drivenWant = (s_resizeDriver == 2) ? mouseWantRaw : kbWantRaw;
+            const float otherMin = (s_resizeDriver == 2) ? kbMinW : mouseMinW;
+            if (drivenWant + gapM + otherMin > totalW) s_heatStacked = true;
+        } else if (wantSum <= totalW * 0.9f) {
+            s_heatStacked = false;
+        }
+    }
+    const bool stacked = s_heatStacked;
+
+    // 并排：被调方保持，另一方吸收剩余空间；叠放：两侧互不影响
+    float kbWant = std::min(kbWantRaw, innerH * 4.0f);
+    float mouseWant = std::min(mouseWantRaw, innerH / kMouseAspect);
 
     float kbW = 0.0f, mouseW = 0.0f;
-    bool stacked = false;
-    if (s_resizeDriver == 2) {                    // 刚调鼠标：鼠标保持，键盘吸收剩余
+    if (stacked) {
+        kbW = std::min(kbWantRaw, innerW);
+        mouseW = std::min(mouseWantRaw, innerW);
+    } else if (s_resizeDriver == 2) {             // 刚调鼠标：鼠标保持，键盘吸收剩余
         mouseW = mouseWant;
         kbW = std::min(totalW - mouseW, kbMaxW);
-        if (kbW < kbMinW) { kbW = kbMinW; stacked = true; }   // 键盘已到下限仍放不下 → 叠放
+        if (kbW < kbMinW) kbW = kbMinW;
     } else {                                      // 键盘主导（含初始）
         kbW = kbWant;
         // 鼠标吸收剩余空间，但不超过"键盘高度 × 0.95"的视觉比例（避免鼠标比键盘还高）
         const float mouseCap = std::max(mouseMinW, kbW * 0.95f / (4.0f * kMouseAspect));
         mouseW = std::min({totalW - kbW, mouseMaxW, mouseCap});
-        if (mouseW < mouseMinW) { mouseW = mouseMinW; stacked = true; }
+        if (mouseW < mouseMinW) mouseW = mouseMinW;
     }
 
     float mouseH = mouseW * kMouseAspect;
-    if (stacked) {                                 // 叠放：保留用户尺寸，超出盒高交给滚动条
-        kbW = std::min(std::clamp(kbRefW * s_kbScale, kbMinW, kbMaxW), innerW);
-        mouseW = std::min(std::clamp(mouseRefW * 1.25f * s_mouseScale, mouseMinW, mouseMaxW), innerW);
+    if (stacked) {                                // 叠放：保留用户尺寸，超出盒高交给滚动条
         mouseH = mouseW * kMouseAspect;
     }
     const float u = std::max(Px(6.0f), kbW / 24.0f);
@@ -589,10 +601,30 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
     MiniButton(ui, "list.collapse", x + w - Px(76.0f), y + Px(10.0f), Px(60.0f), Px(30.0f),
                "收起", false, [] { s_top10Open = false; app::requestUpdate(); });
 
+    // 列表自己的筛选标签（与直方图筛选互不影响）
+    const float filtY = y + Px(48.0f);
+    const float filtW = std::max(Px(120.0f), w - Px(24.0f));
+    const bool showFilter = filtW >= Px(190.0f);   // 面板过窄时隐藏，保持"全部"
+    if (showFilter) {
+        ui.stack("list.filter")
+            .x(x + Px(12.0f)).y(filtY).size(filtW, Px(32.0f))
+            .content([&] {
+                components::segmented(ui, "seg.listfilter")
+                    .size(filtW, Px(32.0f))
+                    .items({"键盘", "鼠标", "全部", "分开"})
+                    .selected(s_listFilter)
+                    .theme(CurrentTheme())
+                    .transition(Motion())
+                    .onChange([](int v) { s_listFilter = v; app::requestUpdate(); })
+                    .build();
+            })
+            .build();
+    }
+
     const float listX = x + Px(12.0f);
-    const float listY = y + Px(48.0f);
+    const float listY = filtY + (showFilter ? Px(40.0f) : Px(2.0f));
     const float listW = w - Px(24.0f);
-    const float listH = h - Px(60.0f);
+    const float listH = std::max(Px(60.0f), y + h - Px(12.0f) - listY);
     const float rowH = Px(30.0f);
 
     components::scrollView(ui, "list.scroll")
@@ -615,19 +647,19 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
                     rows.push_back({&e, std::string()});
                 }
             };
-            if (g_keyFilter == 3) {
+            if (s_listFilter == 3) {
                 rows.push_back({nullptr, "键盘"});
                 pushDesc(false);
                 rows.push_back({nullptr, "鼠标"});
                 pushDesc(true);
-            } else if (g_keyFilter == 2) {
+            } else if (s_listFilter == 2) {
                 for (int k = (int)g_keyHist.size() - 1; k >= 0; --k) {
                     const TopEntry& e = g_keyHist[(size_t)k];
                     if (e.count <= 0) continue;
                     rows.push_back({&e, std::string()});
                 }
             } else {
-                pushDesc(g_keyFilter == 1);
+                pushDesc(s_listFilter == 1);
             }
 
             if (rows.empty()) {
@@ -775,100 +807,49 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
                     .build();
             }
 
-            // 分组：键盘 / 鼠标
-            const bool wantKb = (g_keyFilter == 0 || g_keyFilter == 2 || g_keyFilter == 3);
-            const bool wantMs = (g_keyFilter == 1 || g_keyFilter == 2 || g_keyFilter == 3);
-
-            // 画一组条（升序），无横坐标文字，靠悬浮查看详情
-            auto drawBars = [&](const std::string& prefix, bool mouseGroup,
-                                float groupX, float groupW) {
-                std::vector<const TopEntry*> items;
-                for (const TopEntry& e : g_keyHist)
-                    if (e.isMouse == mouseGroup) items.push_back(&e);
-                if (items.empty()) return;
-                const int n = (int)items.size();
-                const float slotW = groupW / (float)n;
-                // 去掉横坐标文字后条形可以更宽一些
-                const float barW = std::min(40.0f, std::max(2.0f, slotW * 0.70f));
-                for (int i = 0; i < n; ++i) {
-                    const TopEntry& e = *items[(size_t)i];
-                    const float frac = std::clamp(e.frac, 0.0f, 1.0f);
-                    const float barH = std::max(8.0f, frac * plotH);
-                    const float bx = groupX + (float)i * slotW + (slotW - barW) * 0.5f;
-                    const float by = bottomY - barH;
-                    const std::string barId = prefix + std::to_string(i);
-                    const core::Color color = HeatColor(frac);   // 热力渐变：蓝 → 黄 → 红
-                    ui.rect(barId)
-                        .x(bx).y(by).size(barW, barH)
-                        .states(color,
-                                core::mixColor(color, core::Color{1, 1, 1, 1}, 0.18f),
-                                core::mixColor(color, core::Color{0, 0, 0, 1}, 0.12f))
-                        .radius(std::min(m.radius.popup, barW * 0.34f))
-                        .instantStates()
-                        .transition(Motion())
-                        .animate(core::AnimProperty::Frame | core::AnimProperty::Color)
-                        .build();
-                    components::tooltip(ui, barId + ".tooltip")
-                        .theme(tk)
-                        .source(barId)
-                        .value(e.name + " " + WithCommas(e.count) + " 次")
-                        .anchor(bx + barW * 0.5f, by)
-                        .bounds(w, h)
-                        .style(components::TooltipStyle(tk))
-                        .build();
-                }
-            };
-
+            // 依筛选构建显示序列（全部为升序；分开 = 键盘在前、鼠标在后，仍是同一条序列）
+            std::vector<const TopEntry*> items;
+            for (const TopEntry& e : g_keyHist)                    // g_keyHist 本身按次数升序
+                if (g_keyFilter == 0 && e.isMouse) continue;
+                else if (g_keyFilter == 1 && !e.isMouse) continue;
+                else if (g_keyFilter == 3 && e.isMouse) continue;  // 分开：先只放键盘
+                else items.push_back(&e);
             if (g_keyFilter == 3) {
-                // 分开：左半键盘、右半鼠标（同一条基线，峰值统一归一化）
-                const float halfGap = Px(28.0f);
-                const float halfW = (plotW - halfGap) * 0.5f;
-                ui.text("keyhist.tag.kb")
-                    .x(plotX).y(plotY - Px(22.0f)).size(halfW, Px(18.0f))
-                    .text("键盘").fontSize(m.typography.caption).lineHeight(Px(18.0f))
-                    .color(g_theme.textMut).build();
-                ui.text("keyhist.tag.ms")
-                    .x(plotX + halfW + halfGap).y(plotY - Px(22.0f)).size(halfW, Px(18.0f))
-                    .text("鼠标").fontSize(m.typography.caption).lineHeight(Px(18.0f))
-                    .color(g_theme.textMut).build();
-                drawBars("keyhist.kb.", false, plotX, halfW);
-                drawBars("keyhist.ms.", true, plotX + halfW + halfGap, halfW);
-            } else if (g_keyFilter == 2) {
-                std::vector<const TopEntry*> items;   // 全部：混排（数组本身已按次数升序）
-                for (const TopEntry& e : g_keyHist) items.push_back(&e);
-                const int n = (int)items.size();
-                const float slotW = plotW / (float)std::max(1, n);
-                const float barW = std::min(40.0f, std::max(2.0f, slotW * 0.70f));
-                for (int i = 0; i < n; ++i) {
-                    const TopEntry& e = *items[(size_t)i];
-                    const float frac = std::clamp(e.frac, 0.0f, 1.0f);
-                    const float barH = std::max(8.0f, frac * plotH);
-                    const float bx = plotX + (float)i * slotW + (slotW - barW) * 0.5f;
-                    const float by = bottomY - barH;
-                    const std::string barId = "keyhist.all." + std::to_string(i);
-                    const core::Color color = HeatColor(frac);
-                    ui.rect(barId)
-                        .x(bx).y(by).size(barW, barH)
-                        .states(color,
-                                core::mixColor(color, core::Color{1, 1, 1, 1}, 0.18f),
-                                core::mixColor(color, core::Color{0, 0, 0, 1}, 0.12f))
-                        .radius(std::min(m.radius.popup, barW * 0.34f))
-                        .instantStates()
-                        .transition(Motion())
-                        .animate(core::AnimProperty::Frame | core::AnimProperty::Color)
-                        .build();
-                    components::tooltip(ui, barId + ".tooltip")
-                        .theme(tk)
-                        .source(barId)
-                        .value(e.name + " " + WithCommas(e.count) + " 次")
-                        .anchor(bx + barW * 0.5f, by)
-                        .bounds(w, h)
-                        .style(components::TooltipStyle(tk))
-                        .build();
-                }
-            } else {
-                drawBars(g_keyFilter == 1 ? "keyhist.ms." : "keyhist.kb.",
-                         g_keyFilter == 1, plotX, plotW);
+                for (const TopEntry& e : g_keyHist)
+                    if (e.isMouse) items.push_back(&e);            // 再追加鼠标 → 排到最右
+            }
+            if (items.empty()) return;
+
+            const int n = (int)items.size();
+            const float slotW = plotW / (float)n;
+            // 去掉横坐标文字后条形可以更宽一些
+            const float barW = std::min(40.0f, std::max(2.0f, slotW * 0.70f));
+            for (int i = 0; i < n; ++i) {
+                const TopEntry& e = *items[(size_t)i];
+                const float frac = std::clamp(e.frac, 0.0f, 1.0f);
+                const float barH = std::max(8.0f, frac * plotH);
+                const float bx = plotX + (float)i * slotW + (slotW - barW) * 0.5f;
+                const float by = bottomY - barH;
+                const std::string barId = "keyhist.bar." + std::to_string(i);
+                const core::Color color = HeatColor(frac);   // 热力渐变：蓝 → 黄 → 红
+                ui.rect(barId)
+                    .x(bx).y(by).size(barW, barH)
+                    .states(color,
+                            core::mixColor(color, core::Color{1, 1, 1, 1}, 0.18f),
+                            core::mixColor(color, core::Color{0, 0, 0, 1}, 0.12f))
+                    .radius(std::min(m.radius.popup, barW * 0.34f))
+                    .instantStates()
+                    .transition(Motion())
+                    .animate(core::AnimProperty::Frame | core::AnimProperty::Color)
+                    .build();
+                components::tooltip(ui, barId + ".tooltip")
+                    .theme(tk)
+                    .source(barId)
+                    .value(e.name + " " + WithCommas(e.count) + " 次")
+                    .anchor(bx + barW * 0.5f, by)
+                    .bounds(w, h)
+                    .style(components::TooltipStyle(tk))
+                    .build();
             }
         })
         .build();
