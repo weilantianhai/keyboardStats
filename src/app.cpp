@@ -117,6 +117,14 @@ components::theme::ThemeColorTokens AppTheme() {
     t.text          = g_theme.text;
     t.border        = g_theme.border;
     t.primary       = g_theme.selected;
+    // 整体字号调大：分段控件/柱状图/日期选择器等组件统一放大
+    t.metrics.typography.caption  += 2.0f;
+    t.metrics.typography.label    += 2.0f;
+    t.metrics.typography.body     += 2.0f;
+    t.metrics.typography.title    += 2.0f;
+    t.metrics.typography.display  += 2.0f;
+    t.metrics.typography.subtitle += 2.0f;
+    t.metrics.typography.input    += 2.0f;
     return t;
 }
 components::theme::ThemeColorTokens CurrentTheme() { return AppTheme(); }
@@ -345,8 +353,8 @@ void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
     ui.text(id + ".t")
         .x(x).y(y).size(w, h)
         .text(label)
-        .fontSize(13.0f)
-        .lineHeight(13.0f)
+        .fontSize(15.0f)
+        .lineHeight(16.0f)
         .color(accent ? Hex(0xFFFFFF) : g_theme.text)
         .horizontalAlign(core::HorizontalAlign::Center)
         .verticalAlign(core::VerticalAlign::Center)
@@ -355,19 +363,19 @@ void MiniButton(core::dsl::Ui& ui, const std::string& id, float x, float y,
 
 void DrawHeader(core::dsl::Ui& ui, float w) {
     ui.text("hd.title")
-        .x(28.0f).y(18.0f).size(w - 56.0f, 34.0f)
+        .x(28.0f).y(14.0f).size(w - 200.0f, 40.0f)
         .text("KeyboardStats 键盘热力统计")
-        .fontSize(26.0f).lineHeight(32.0f)
+        .fontSize(30.0f).lineHeight(36.0f)
         .color(g_theme.text)
         .build();
     std::string sub = "共 " + WithCommas(g_stats.total) + " 次按键 · " + g_rangeText;
     ui.text("hd.sub")
-        .x(28.0f).y(56.0f).size(w - 56.0f, 24.0f)
+        .x(28.0f).y(58.0f).size(w - 200.0f, 24.0f)
         .text(sub)
-        .fontSize(14.0f).lineHeight(20.0f)
+        .fontSize(16.0f).lineHeight(22.0f)
         .color(g_theme.textMut)
         .build();
-    MiniButton(ui, "hd.theme", w - 122.0f, 22.0f, 94.0f, 28.0f,
+    MiniButton(ui, "hd.theme", w - 122.0f, 22.0f, 94.0f, 30.0f,
                g_lightMode ? "深色模式" : "浅色模式", false, ToggleTheme);
 }
 
@@ -466,8 +474,8 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
         ui.text(id + ".t")
             .x(x).y(y).size(w, h)
             .text(Utf8(cap))
-            .fontSize(std::min(16.0f, std::max(8.0f, h * 0.30f)))
-            .lineHeight(std::min(16.0f, std::max(8.0f, h * 0.30f)))
+            .fontSize(std::min(20.0f, std::max(9.0f, h * 0.32f)))
+            .lineHeight(std::min(20.0f, std::max(9.0f, h * 0.32f)))
             .color(count > 0 ? Hex(0xFFFFFF) : g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Center)
             .verticalAlign(core::VerticalAlign::Center)
@@ -478,8 +486,8 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
         ui.text(id + ".c")
             .x(x).y(y + h * 0.52f).size(w, h * 0.4f)
             .text(WithCommas(count))
-            .fontSize(std::min(15.0f, std::max(10.0f, h * 0.24f)))
-            .lineHeight(std::min(16.0f, std::max(11.0f, h * 0.26f)))
+            .fontSize(std::min(18.0f, std::max(12.0f, h * 0.26f)))
+            .lineHeight(std::min(19.0f, std::max(13.0f, h * 0.28f)))
             .color(Hex(0x1E293B))
             .horizontalAlign(core::HorizontalAlign::Center)
             .verticalAlign(core::VerticalAlign::Top)
@@ -523,8 +531,8 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const float ly = ky + u * 6.0f + 22.0f;
     const float lx = kx + u * 24.0f - 8.0f * 22.0f - 46.0f;
     ui.text("legend.lo")
-        .x(lx - 30.0f).y(ly - 2.0f).size(28.0f, 16.0f)
-        .text("少").fontSize(12.0f).lineHeight(16.0f)
+        .x(lx - 30.0f).y(ly - 3.0f).size(28.0f, 18.0f)
+        .text("少").fontSize(14.0f).lineHeight(18.0f)
         .color(g_theme.textMut).horizontalAlign(core::HorizontalAlign::Right)
         .build();
     for (int i = 0; i < 8; ++i) {
@@ -536,8 +544,8 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
             .build();
     }
     ui.text("legend.hi")
-        .x(lx + 8 * 22.0f + 4.0f).y(ly - 2.0f).size(24.0f, 16.0f)
-        .text("多").fontSize(12.0f).lineHeight(16.0f)
+        .x(lx + 8 * 22.0f + 4.0f).y(ly - 3.0f).size(24.0f, 18.0f)
+        .text("多").fontSize(14.0f).lineHeight(18.0f)
         .color(g_theme.textMut)
         .build();
 }
@@ -555,27 +563,27 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
         .border(1.0f, g_theme.border)
         .build();
     ui.text("top.title")
-        .x(x + 16.0f).y(y + 12.0f).size(w - 32.0f, 22.0f)
+        .x(x + 16.0f).y(y + 12.0f).size(w - 32.0f, 24.0f)
         .text("Top 10")
-        .fontSize(15.0f).lineHeight(20.0f)
+        .fontSize(17.0f).lineHeight(22.0f)
         .color(g_theme.text)
         .build();
 
-    float rowY = y + 44.0f;
-    const float rowH = std::min(26.0f, (h - 56.0f) / 10.0f);
+    float rowY = y + 46.0f;
+    const float rowH = std::min(30.0f, (h - 60.0f) / 10.0f);
     int rank = 1;
     for (const TopEntry& e : g_top) {
         std::string id = "top.row." + std::to_string(rank);
         ui.text(id + ".name")
             .x(x + 16.0f).y(rowY).size(w * 0.55f, rowH)
             .text(std::to_string(rank) + ". " + e.name)
-            .fontSize(12.0f).lineHeight(rowH)
+            .fontSize(14.0f).lineHeight(rowH)
             .color(g_theme.text)
             .build();
         ui.text(id + ".count")
             .x(x + w * 0.55f).y(rowY).size(w - w * 0.55f - 16.0f, rowH)
             .text(WithCommas(e.count))
-            .fontSize(12.0f).lineHeight(rowH)
+            .fontSize(14.0f).lineHeight(rowH)
             .color(g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Right)
             .build();
@@ -600,7 +608,7 @@ void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
         ui.text("top.empty")
             .x(x + 16.0f).y(rowY).size(w - 32.0f, 24.0f)
             .text("暂无数据，去打几个字吧")
-            .fontSize(12.0f).lineHeight(20.0f)
+            .fontSize(14.0f).lineHeight(20.0f)
             .color(g_theme.textMut)
             .build();
     }
