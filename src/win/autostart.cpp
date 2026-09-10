@@ -28,8 +28,8 @@ void AutostartSet(bool enable) {
     HKEY k;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS) return;
     if (enable) {
-        // 带 --background：开机只拉起记录程序 + 托盘图标，不弹主窗口、不建图形界面
-        std::wstring v = L"\"" + ExePath() + L"\" --background";
+        // 带 --record：开机直接启动无界面记录进程（钩子+落盘+托盘图标），内存占用极小
+        std::wstring v = L"\"" + ExePath() + L"\" --record";
         RegSetValueExW(k, kRunVal, 0, REG_SZ, (const BYTE*)v.c_str(), (DWORD)((v.size() + 1) * sizeof(wchar_t)));
     } else {
         RegDeleteValueW(k, kRunVal);

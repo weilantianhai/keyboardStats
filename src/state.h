@@ -17,6 +17,7 @@ struct TopEntry {
 };
 
 extern int  g_page;           // 0=热力图 1=直方图
+extern int  g_debugPick;      // 调试：--pick=1/2 启动即打开主题色/热力色取色器（消费后清零）
 extern int  g_rangeMode;      // 0=今天 1=7天 2=30天 3=全部 4=自定义
 extern uint32_t g_customFrom, g_customTo;    // 已应用的 yyyymmdd
 extern uint32_t g_pendingFrom, g_pendingTo;  // 日期选择器中未应用的值

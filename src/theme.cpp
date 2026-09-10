@@ -226,18 +226,26 @@ UiTheme DeriveTheme(const core::Color& accent, bool dark) {
     return t;
 }
 
-// 自定义热力主色 → 三段色阶（低频段用主色暗部，高频段往亮/暖偏）
+// 自定义热力主色 → 三段色阶。
+// 按用户要求：**同一个色相，由浅到深**——低频=主色的浅调，高频=主色的深调。
+// （之前那版把高频段偏了 42° 色相，看着就不像"选中的那个颜色"了。）
 void CustomHeatRamp(core::Color base, core::Color* lo, core::Color* mid, core::Color* hi) {
     double h = 0, s = 0, l = 0;
     RgbToHsl(base, &h, &s, &l);
-    const double hs = std::clamp(s, 0.35, 1.0);
-    *lo  = Hsl(h, hs * 0.85, 0.28);
-    *mid = Hsl(h, hs,       0.55);
-    *hi  = Hsl(h + 42.0, hs * 0.95, 0.72);
+    const double hs = std::clamp(s, 0.30, 1.0);
+    const double hl = std::clamp(l, 0.30, 0.75);
+    // 以主色自身的明度为中心，往两端展开，保证"主色"在色阶里有落点
+    const double topL = std::clamp(hl + 0.30, 0.62, 0.90);   // 最浅
+    const double botL = std::clamp(hl - 0.34, 0.16, 0.42);   // 最深
+    *lo  = Hsl(h, hs * 0.30, topL);              // 低频：淡
+    *mid = Hsl(h, hs * 0.70, (topL + botL) * 0.5);
+    *hi  = Hsl(h, hs,        botL);              // 高频：浓
 }
 
 core::Color HeatStop(int index) {
-    if (g_heat == kCustomHeat) {
+    // 注意：SetCustomHeatBase 只置 g_heatCustom，g_heat 仍停在内置方案下标上，
+    // 所以这里必须看 g_heatCustom（否则自定义热力色永远不生效——上一版就是栽在这）。
+    if (g_heatCustom || g_heat == kCustomHeat) {
         core::Color lo, mid, hi;
         CustomHeatRamp(g_customHeatBase, &lo, &mid, &hi);
         return index == 0 ? lo : (index == 1 ? mid : hi);
@@ -363,6 +371,16 @@ void HeatPreviewOf(int index, core::Color* lo, core::Color* mid, core::Color* hi
 }
 
 std::string ColorToHex(core::Color c) { return ToHex(c); }
+
+core::Color ColorFromHsl(double h, double s, double l, float a) { return Hsl(h, s, l, a); }
+
+double HueOfColor(core::Color c) {
+    double h = 0, s = 0, l = 0;
+    RgbToHsl(c, &h, &s, &l);
+    return h;
+}
+
+void ColorToHsl(core::Color c, double* h, double* s, double* l) { RgbToHsl(c, h, s, l); }
 
 void SetCustomAccent(core::Color accent, bool dark) {
     g_customAccent = accent;

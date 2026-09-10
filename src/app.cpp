@@ -11,6 +11,7 @@
 #include "pages.h"
 #include "ui_util.h"
 #include "fontscale.h"
+#include "recorder.h"
 
 #include <windows.h>
 
@@ -24,6 +25,7 @@ namespace app {
 // ────────────────── 运行状态定义（声明见 state.h） ──────────────────
 
 int  g_page = 0;
+int  g_debugPick = 0;
 int  g_rangeMode = 3;
 uint32_t g_customFrom = 0, g_customTo = 0;
 uint32_t g_pendingFrom = 0, g_pendingTo = 0;
@@ -42,6 +44,7 @@ int g_keyFilter = 2;   // 按键计数筛选：0=键盘 1=鼠标 2=全部 3=分�
 static bool g_startHidden = false;
 static bool g_uiServicesReady = false;
 static UINT_PTR g_timerId = 0;
+static bool g_selfRecording = false;   // 记录进程拉不起来时，GUI 兜底自己记录
 
 // 窗口最小尺寸：启动阶段的重试计数与执行函数（实现见文件后部）
 static int  s_enforceLeft = 20;   // 最多尝试次数（500ms/次）
@@ -146,6 +149,8 @@ static bool StatsDiffer(const RangeStats& a, const RangeStats& b) {
 // 周期任务：驱动落盘 + 数据节流刷新（单线程）
 static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     StorageFlushIfDue();
+    // 记录进程每 5 秒落盘，GUI 这里增量同步（文件没变时开销≈0）
+    if (!g_selfRecording) StorageReloadIfChanged();
 
     TickFontScale(GetTickCount64() / 1000.0);   // 字号滑块：值稳定后才应用
 
@@ -173,12 +178,12 @@ static const int kMinClientH = 640;
 static HWND MainWindowHandle();   // 定义在下面
 
 // ────────────────── 关闭行为（点 ×） ──────────────────
-// 框架默认是"关窗即静默隐藏到托盘"。这里改成可配置：询问 / 直接最小化 / 直接退出，
-// 询问时用应用内弹窗（和清除记录那套一致的观感）。
+// 托盘图标属于记录进程（--record），GUI 关窗即退出自己，后台记录不受影响：
+//   「关闭窗口」= 只退出图形界面，托盘里随时可以再唤起；
+//   「退出程序」= 连后台记录一起退出（先通知记录进程落盘收尾）。
 
 bool g_closeDialogOpen = false;
 bool g_closeDontAsk = false;
-static bool s_closeAllowed = false;   // 本次已确认，放行给框架去隐藏
 
 int CurrentCloseAction() {
     const std::string v = PrefGetValue(L"ui-close.txt", "mode", "ask");
@@ -194,6 +199,7 @@ void SetCloseAction(int mode) {
 
 void ExitAppNow() {
     // ExitProcess 不跑 atexit 回调，所以这里手动做掉它该做的事
+    // （GUI 模式下钩子/缓冲只有兜底自记录时才有内容，平调无害）
     RemoveHook();
     StorageFlushNow();
     ExitProcess(0);
@@ -202,24 +208,18 @@ void ExitAppNow() {
 void CloseDialogDecide(bool exitApp) {
     g_closeDialogOpen = false;
     if (g_closeDontAsk) SetCloseAction(exitApp ? kCloseExit : kCloseToTray);
-    if (exitApp) ExitAppNow();
-    HWND main = MainWindowHandle();
-    if (main) {
-        s_closeAllowed = true;
-        PostMessageW(main, WM_CLOSE, 0, 0);   // 放行一次，交给框架隐藏到托盘
-    }
-    app::requestUpdate();
+    if (exitApp) StorageSignalShutdown();   // 「退出程序」连后台记录一起收尾
+    ExitAppNow();
 }
 
 static LRESULT CALLBACK MinSizeWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_CLOSE && !s_closeAllowed) {
-        s_closeAllowed = false;
+    if (msg == WM_CLOSE) {
         switch (CurrentCloseAction()) {
-            case kCloseToTray:
-                s_closeAllowed = true;
-                PostMessageW(h, WM_CLOSE, 0, 0);   // 重新投递，这次放行
+            case kCloseToTray:   // 「关闭窗口」：退 GUI，记录进程继续
+                ExitAppNow();
                 return 0;
-            case kCloseExit:
+            case kCloseExit:     // 「退出程序」：连记录进程一起
+                StorageSignalShutdown();
                 ExitAppNow();
                 return 0;
             default:
@@ -228,7 +228,6 @@ static LRESULT CALLBACK MinSizeWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
         }
     }
-    if (msg == WM_CLOSE) s_closeAllowed = false;   // 用掉这次放行，下次还要重新判断
 
     if (msg == WM_GETMINMAXINFO && s_minTrack.x > 0) {
         auto* mmi = reinterpret_cast<MINMAXINFO*>(lp);
@@ -334,23 +333,31 @@ static std::string AssetAbs(const char* name) { return ExeDirA() + "assets\\" + 
 // ────────────────── EUI-NEO 应用入口（框架提供 main） ──────────────────
 
 const DslAppConfig& dslAppConfig() {
-    // 单实例 + 存储 + 钩子 + 主题：必须在窗口出现前完成（静态初始化器时机最早）
+    // 入口分流/单实例/存储/钩子：必须在窗口出现前完成（静态初始化器时机最早）
     static const bool coreReady = [] {
-        HANDLE mutex = CreateMutexW(nullptr, TRUE, L"KeyboardStats.SingleInstance");
+        // ── 无界面记录进程：--record → 钩子 + 落盘 + 托盘，不进 GUI（不返回）──
+        if (wcsstr(GetCommandLineW(), L"--record")) {
+            RecorderRun();
+            return false;
+        }
+
+        // ── GUI 单实例：已有主窗口就唤起它，然后退出 ──
+        HANDLE guiMutex = CreateMutexW(nullptr, TRUE, kIpcGuiMutex);
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            MessageBoxW(nullptr, L"KeyboardStats 已在运行（请查看系统托盘）",
-                        L"KeyboardStats", MB_OK | MB_ICONINFORMATION);
+            RecorderShowGui();   // 找到已有窗口 → 前台；没有窗口（异常残留）就静默退
             ExitProcess(0);
         }
-        (void)mutex;   // 持有至进程退出
+        (void)guiMutex;   // 持有至进程退出
 
-        StorageInit();
-        InstallHook();
+        // ── 确保记录进程在跑；拉不起来则 GUI 兜底自己记录（老行为）──
+        g_selfRecording = !EnsureRecorderRunning();
+        if (g_selfRecording) InstallHook();
         atexit([] {
             RemoveHook();
             StorageFlushNow();
         });
 
+        StorageInit();
         LoadThemePref();   // 先于 config 求值，clearColor 才能拿到正确的主题底色
         LoadFontPref();    // 字体缩放偏好（自动/自定义）
 
@@ -360,6 +367,11 @@ const DslAppConfig& dslAppConfig() {
         if (const wchar_t* p = wcsstr(GetCommandLineW(), L"--page=")) {
             const int n = _wtoi(p + 7);
             if (n >= 0 && n <= 3) g_page = n;
+        }
+        // 调试用：--pick=1/2 启动即打开主题色/热力色取色浮层
+        if (const wchar_t* p = wcsstr(GetCommandLineW(), L"--pick=")) {
+            const int n = _wtoi(p + 7);
+            if (n >= 1 && n <= 2) g_debugPick = n;
         }
         return true;
     }();
@@ -372,9 +384,8 @@ const DslAppConfig& dslAppConfig() {
         .windowSize(1180, 720)
         .fps(60.0)
         .iconPath(AssetAbs("icon.png"))
-        .tray(true)
-        .trayTitle("KeyboardStats")
-        .trayIcon(AssetAbs("icon.png"))
+        // 托盘属于记录进程（常驻的那个）；GUI 不再挂第二个图标
+        .tray(false)
         .onKeyEvent([](const eui::KeyEvent& e) {
             if (!e.isDown()) return;
             if (e.key == eui::InputKey::Left || e.key == eui::InputKey::PageUp) {

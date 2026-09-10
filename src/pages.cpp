@@ -1506,6 +1506,219 @@ std::string s_pickerTarget;
 // 自定义方案是否走深色底（浅色底会让强调色更难压住）
 bool s_customDark = true;
 
+// ── 自实现 HSL 取色浮层 ──
+// 框架的 colorPicker 只提供预设色板（没有色环/连续取色）。这里用 gradient +
+// mouseArea 自己实现：色相条（12 段水平渐变拼成整圈）+ 饱和度条 + 明度条，
+// 三根都支持按住拖动，拖动时实时应用（取消会还原打开时的状态）。
+static double s_pickH = 210.0, s_pickS = 0.85, s_pickL = 0.55;
+static core::Color s_pickSnap{};            // 打开时的颜色（取消时还原）
+static int  s_pickSnapPal = 0;              // 打开时的配色下标
+static int  s_pickSnapHeat = 0;             // 打开时的热力下标
+static bool s_pickSnapHeatCustom = false;
+
+static void PickerApply() {
+    const core::Color c = ColorFromHsl(s_pickH, s_pickS, s_pickL);
+    if (s_pickerTarget == "heat") SetCustomHeatBase(c);
+    else SetCustomAccent(c, s_customDark);
+}
+
+static void PickerCancel() {
+    if (s_pickerTarget == "heat") {
+        SetCustomHeatBase(s_pickSnap);
+        if (!s_pickSnapHeatCustom) SetHeatPalette(s_pickSnapHeat);
+    } else {
+        SetCustomAccent(s_pickSnap, s_customDark);
+        if (s_pickSnapPal != PaletteCount() - 1) SetPalette(s_pickSnapPal);
+    }
+    s_pickerTarget.clear();
+    app::requestUpdate();
+}
+
+static void OpenPicker(const char* which) {
+    s_pickerTarget = which;
+    const core::Color c = (std::string(which) == "heat") ? CustomHeatBase() : CustomAccent();
+    ColorToHsl(c, &s_pickH, &s_pickS, &s_pickL);
+    s_pickSnap = c;
+    s_pickSnapPal = CurrentPalette();
+    s_pickSnapHeat = CurrentHeatPalette();
+    s_pickSnapHeatCustom = HeatIsCustom();
+    app::requestUpdate();
+}
+
+// 浮层本体（后画覆盖先画；子元素一律不设 zIndex——MiniButton 不带 zIndex，
+// 单方面抬高层级会把按钮盖到遮罩后面，关窗弹窗踩过这个坑）
+static void DrawColorPickerOverlay(core::dsl::Ui& ui, const eui::Screen& screen,
+                                   const components::theme::ThemeColorTokens& tk) {
+    const bool forHeat = s_pickerTarget == "heat";
+    const auto& m = tk.metrics;
+
+    ui.rect("pick.mask")
+        .size(screen.width, screen.height)
+        .color(core::Color{0.0f, 0.0f, 0.0f, 0.45f})
+        .onClick(PickerCancel)
+        .build();
+
+    const float dw = Px(470.0f), dh = Px(430.0f);
+    const float dx = (screen.width - dw) * 0.5f, dy = (screen.height - dh) * 0.5f;
+    ui.rect("pick.panel")
+        .x(dx).y(dy).size(dw, dh)
+        .color(tk.surface)
+        .radius(Px(14.0f))
+        .border(1.0f, g_theme.border)
+        .shadow(components::theme::shadow(tk, 28.0f, 8.0f, 0.28f, 0.16f))
+        .build();
+
+    const float pad = Px(26.0f);
+    const float sx = dx + pad, sw = dw - pad * 2.0f;
+
+    ui.text("pick.title")
+        .x(sx).y(dy + Px(20.0f)).size(sw, Px(30.0f))
+        .text(forHeat ? "选择热力主色" : "选择主题色")
+        .fontSize(m.typography.title)
+        .lineHeight(m.typography.title + m.typography.lineGap)
+        .color(g_theme.text)
+        .build();
+    ui.text("pick.sub")
+        .x(sx).y(dy + Px(52.0f)).size(sw, Px(22.0f))
+        .text(forHeat ? "按主色的同色相、由浅到深着色（平方根分档）"
+                      : "以这个主色推导整套界面配色")
+        .fontSize(m.typography.caption)
+        .lineHeight(Px(20.0f))
+        .color(g_theme.textMut)
+        .build();
+
+    // 当前颜色预览
+    const core::Color cur = ColorFromHsl(s_pickH, s_pickS, s_pickL);
+    const float pvY = dy + Px(84.0f);
+    ui.rect("pick.chip")
+        .x(sx).y(pvY).size(Px(46.0f), Px(34.0f))
+        .color(cur).radius(Px(8.0f)).border(1.0f, g_theme.border)
+        .build();
+    ui.text("pick.hex")
+        .x(sx + Px(60.0f)).y(pvY + Px(6.0f)).size(Px(140.0f), Px(24.0f))
+        .text(ColorToHex(cur))
+        .fontSize(m.typography.body)
+        .lineHeight(Px(24.0f))
+        .color(g_theme.text)
+        .build();
+
+    // 三根色条。mouseArea 的局部坐标已按元素逻辑宽度换算，e.x∈[0,宽]。
+    const float sh = Px(26.0f);
+    const float hueY = dy + Px(140.0f);
+    const float satY = hueY + sh + Px(38.0f);
+    const float litY = satY + sh + Px(38.0f);
+
+    auto stripLabel = [&](const char* id, float ly, const char* text) {
+        ui.text(id)
+            .x(sx).y(ly).size(sw, Px(18.0f))
+            .text(text)
+            .fontSize(m.typography.caption)
+            .lineHeight(Px(18.0f))
+            .color(g_theme.textMut)
+            .build();
+    };
+    stripLabel("pick.hue.label", hueY - Px(22.0f), "色相");
+    stripLabel("pick.sat.label", satY - Px(22.0f), "饱和度");
+    stripLabel("pick.lit.label", litY - Px(22.0f), "明度");
+
+    // 色相条：12 段水平渐变拼成 360°（每段 30°）
+    const int kSegs = 12;
+    const float segW = sw / kSegs;
+    for (int i = 0; i < kSegs; ++i) {
+        ui.rect("pick.hue.s" + std::to_string(i))
+            .x(sx + segW * i).y(hueY).size(segW + 0.5f, sh)
+            .gradient(ColorFromHsl(i * 30.0, 1.0, 0.5),
+                      ColorFromHsl((i + 1) * 30.0, 1.0, 0.5),
+                      core::GradientDirection::Horizontal)
+            .build();
+    }
+    components::mouseArea(ui, "pick.hue.area")
+        .x(sx).y(hueY).size(sw, sh)
+        .color(core::Color{0.0f, 0.0f, 0.0f, 0.0f})
+        .cursor(core::CursorShape::Hand)
+        .onPress([sw](const components::MouseEvent& e) {
+            s_pickH = 360.0 * std::clamp(e.x / sw, 0.0f, 1.0f);
+            PickerApply();
+        })
+        .onDrag([sw](const components::MouseDragEvent& e) {
+            s_pickH = 360.0 * std::clamp(e.x / sw, 0.0f, 1.0f);
+            PickerApply();
+        })
+        .build();
+
+    // 饱和度条：灰 → 主色（横向）
+    ui.rect("pick.sat.grad")
+        .x(sx).y(satY).size(sw, sh)
+        .gradient(ColorFromHsl(s_pickH, 0.0, s_pickL),
+                  ColorFromHsl(s_pickH, 1.0, s_pickL),
+                  core::GradientDirection::Horizontal)
+        .build();
+    components::mouseArea(ui, "pick.sat.area")
+        .x(sx).y(satY).size(sw, sh)
+        .color(core::Color{0.0f, 0.0f, 0.0f, 0.0f})
+        .cursor(core::CursorShape::Hand)
+        .onPress([sw](const components::MouseEvent& e) {
+            s_pickS = std::clamp(static_cast<double>(e.x) / sw, 0.0, 1.0);
+            PickerApply();
+        })
+        .onDrag([sw](const components::MouseDragEvent& e) {
+            s_pickS = std::clamp(static_cast<double>(e.x) / sw, 0.0, 1.0);
+            PickerApply();
+        })
+        .build();
+
+    // 明度条：上白下黑，中点是纯色（两段纵向渐变）
+    const float halfH = sh * 0.5f;
+    ui.rect("pick.lit.top")
+        .x(sx).y(litY).size(sw, halfH)
+        .gradient(ColorFromHsl(s_pickH, s_pickS * 0.55, 0.97),
+                  ColorFromHsl(s_pickH, s_pickS, 0.50),
+                  core::GradientDirection::Vertical)
+        .build();
+    ui.rect("pick.lit.bot")
+        .x(sx).y(litY + halfH).size(sw, halfH)
+        .gradient(ColorFromHsl(s_pickH, s_pickS, 0.50),
+                  ColorFromHsl(s_pickH, s_pickS, 0.03),
+                  core::GradientDirection::Vertical)
+        .build();
+    components::mouseArea(ui, "pick.lit.area")
+        .x(sx).y(litY).size(sw, sh)
+        .color(core::Color{0.0f, 0.0f, 0.0f, 0.0f})
+        .cursor(core::CursorShape::Hand)
+        .onPress([sh](const components::MouseEvent& e) {
+            s_pickL = std::clamp(1.0 - static_cast<double>(e.y) / sh, 0.0, 1.0);
+            PickerApply();
+        })
+        .onDrag([sh](const components::MouseDragEvent& e) {
+            s_pickL = std::clamp(1.0 - static_cast<double>(e.y) / sh, 0.0, 1.0);
+            PickerApply();
+        })
+        .build();
+
+    // 三根色条的游标（白条 + 深描边，深浅底上都看得见）
+    auto thumbV = [&](const std::string& id, float tx, float ty) {
+        ui.rect(id)
+            .x(tx - Px(3.0f)).y(ty - Px(4.0f)).size(Px(6.0f), sh + Px(8.0f))
+            .color(core::Color{1.0f, 1.0f, 1.0f, 0.95f})
+            .radius(Px(3.0f))
+            .border(1.0f, core::Color{0.0f, 0.0f, 0.0f, 0.35f})
+            .build();
+    };
+    thumbV("pick.hue.thumb", sx + (float)(s_pickH / 360.0) * sw, hueY);
+    thumbV("pick.sat.thumb", sx + (float)s_pickS * sw, satY);
+    thumbV("pick.lit.thumb", sx + Px(4.0f), litY + (float)(1.0 - s_pickL) * sh);
+
+    // 底部按钮：完成（保留当前，拖动时已实时应用）/ 取消（还原打开时状态）
+    const float bw = Px(132.0f), bh = Px(36.0f);
+    const float by = dy + dh - Px(58.0f);
+    MiniButton(ui, "pick.ok", dx + dw - pad - bw, by, bw, bh, "完成", true, [] {
+        s_pickerTarget.clear();
+        app::requestUpdate();
+    });
+    MiniButton(ui, "pick.cancel", dx + dw - pad - bw * 2.0f - Px(12.0f), by, bw, bh,
+               "取消", false, PickerCancel);
+}
+
 // 带色块的方案按钮：左侧一个小色片，右侧文字
 void SwatchButton(core::dsl::Ui& ui, const std::string& id, float x, float y, float w, float h,
                   const std::string& label, core::Color chipA, core::Color chipB,
@@ -1588,6 +1801,13 @@ void HeatSwatchButton(core::dsl::Ui& ui, const std::string& id, float x, float y
 void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const auto tk = CurrentTheme();
     const auto& m = tk.metrics;
+
+    // 调试入口：--pick=1/2 启动即打开取色浮层（只消费一次）
+    if (g_debugPick != 0) {
+        OpenPicker(g_debugPick == 2 ? "heat" : "accent");
+        g_debugPick = 0;
+    }
+
     const float x = Px(28.0f), y = ContentTop();
     const float w = std::min(screen.width - Px(56.0f), Px(760.0f));
     const float viewH = std::max(Px(120.0f), screen.height - y - Px(24.0f));
@@ -1628,8 +1848,10 @@ void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen) {
         }
     };
 
-    const float off = ScrollArea(ui, "theme.scroll", x, y, w, viewH, contentH, s_themeScroll,
-                                 [&](core::dsl::Ui& su, float cw) {
+    // 取色浮层打开时不画底层滚动区（避免遮罩下面还能滚动/悬停），整页只留浮层
+    if (s_pickerTarget.empty()) {
+        const float off = ScrollArea(ui, "theme.scroll", x, y, w, viewH, contentH, s_themeScroll,
+                                     [&](core::dsl::Ui& su, float cw) {
                 // ── 1. 配色方案 ──
                 panelBg("th.pal.panel", 0.0f, palH);
                 heading("th.pal.title", 0.0f, "配色方案",
@@ -1711,8 +1933,7 @@ void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen) {
 
                 const float row2 = row1 + Px(52.0f);
                 MiniButton(su, "th.cust.heat", pad, row2, btnW, btnH, "选择热力主色", false, [] {
-                    s_pickerTarget = "heat";
-                    app::requestUpdate();
+                    OpenPicker("heat");
                 });
                 su.rect("th.cust.heatprev")
                     .x(pad + btnW + Px(12.0f)).y(row2 + Px(8.0f)).size(Px(24.0f), Px(24.0f))
@@ -1728,32 +1949,11 @@ void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen) {
                     .color(g_theme.textMut)
                     .build();
                                  });
-    ScrollThumb(ui, "theme.scroll", x, y, w, viewH, contentH, off);
-
-    // 取色面板（框架组件，全屏遮罩 + 面板）
-    if (!s_pickerTarget.empty()) {
-        const bool forHeat = s_pickerTarget == "heat";
-        components::colorPicker(ui, "theme.picker")
-            .open(true)
-            .screen(screen.width, screen.height)
-            .size(Px(560.0f), Px(460.0f))
-            .value(forHeat ? CustomHeatBase() : CustomAccent())
-            .colors({Hex(0x2563EB), Hex(0x7C3AED), Hex(0xDB2777), Hex(0xDC2626),
-                     Hex(0xD97706), Hex(0x16A34A), Hex(0x0D9488), Hex(0x475569),
-                     Hex(0x0EA5E9), Hex(0x8B5CF6), Hex(0xF59E0B), Hex(0x10B981)})
-            .theme(tk)
-            .transition(Motion())
-            .zIndex(30)
-            .onChange([forHeat](core::Color c) {
-                if (forHeat) SetCustomHeatBase(c);
-                else SetCustomAccent(c, s_customDark);
-                app::requestUpdate();
-            })
-            .onOpenChange([](bool open) {
-                if (!open) { s_pickerTarget.clear(); app::requestUpdate(); }
-            })
-            .build();
+        ScrollThumb(ui, "theme.scroll", x, y, w, viewH, contentH, off);
     }
+
+    // 取色浮层（自实现 HSL：色相/饱和度/明度三根可拖色条）
+    if (!s_pickerTarget.empty()) DrawColorPickerOverlay(ui, screen, tk);
 }
 
 // ────────────────────────── 关窗确认弹窗 ──────────────────────────
@@ -1790,9 +1990,9 @@ void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
     // 手动换行：这一行太长会超出弹窗宽度
     ui.text("close.text")
         .x(dx + Px(26.0f)).y(dy + Px(64.0f)).size(dw - Px(52.0f), Px(76.0f))
-        .text("最小化到托盘后只保留记录程序在后台运行，\n"
-              "图形界面会完全停止渲染，内存占用很小；\n"
-              "需要看统计时点托盘图标的 Show 即可恢复。")
+        .text("关闭窗口后，后台记录程序会继续运行（内存占用极小），\n"
+              "点任务栏托盘图标的「打开 KeyboardStats」随时唤起主窗口。\n"
+              "「退出程序」会连后台记录一起退出。")
         .fontSize(m.typography.body)
         .lineHeight(Px(24.0f))
         .color(g_theme.textMut)
@@ -1815,7 +2015,7 @@ void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 
     MiniButton(ui, "close.totray", dx + Px(26.0f), dy + dh - Px(64.0f),
-               Px(196.0f), Px(44.0f), "最小化到托盘", true,
+               Px(196.0f), Px(44.0f), "关闭窗口", true,
                [] { CloseDialogDecide(false); });
     MiniButton(ui, "close.exit", dx + dw - Px(158.0f), dy + dh - Px(64.0f),
                Px(132.0f), Px(44.0f), "退出程序", false,

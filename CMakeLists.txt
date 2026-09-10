@@ -11,6 +11,7 @@ add_executable(KeyboardStats
     src/theme.cpp
     src/fontscale.cpp
     src/pages.cpp
+    src/recorder.cpp
     src/win/autostart.cpp
     src/hook.cpp
     src/storage.cpp
@@ -18,8 +19,9 @@ add_executable(KeyboardStats
 )
 eui_neo_configure_app(KeyboardStats)
 
-# 记录管理用到 Win32 文件对话框、ShellExecute 与文件夹选择（SHBrowseForFolder/CoTaskMemFree）
-target_link_libraries(KeyboardStats PRIVATE comdlg32 shell32 ole32)
+# 记录管理用到 Win32 文件对话框、ShellExecute 与文件夹选择（SHBrowseForFolder/CoTaskMemFree）；
+# 记录进程的托盘图标用 GDI+ 从 assets\icon.png 生成
+target_link_libraries(KeyboardStats PRIVATE comdlg32 shell32 ole32 gdiplus)
 
 # 部署运行资源（托盘/窗口图标按 exe 同级 assets\ 解析）
 add_custom_command(TARGET KeyboardStats POST_BUILD

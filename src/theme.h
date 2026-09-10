@@ -86,4 +86,9 @@ void HeatPreviewOf(int index, core::Color* lo, core::Color* mid, core::Color* hi
 // #RRGGBB（大写）
 std::string ColorToHex(core::Color c);
 
+// HSL 互转（h: 0..360, s/l: 0..1）——自定义色条要用
+core::Color ColorFromHsl(double h, double s, double l, float a = 1.0f);
+double     HueOfColor(core::Color c);
+void       ColorToHsl(core::Color c, double* h, double* s, double* l);
+
 } // namespace app

@@ -28,6 +28,11 @@ static std::wstring g_defaultDataDir;       // 默认数据文件夹（exe 同�
 static std::wstring g_dataDir;              // 数据文件夹（ui-data.txt 的 dir= 指定）
 static std::wstring g_dataFile;             // 当前数据文件名（空 = 自动按月）
 
+// 双进程 IPC（事件句柄；定义在"双进程协作"一节，StorageInit 会先调用）
+static HANDLE g_evReload = nullptr;
+static HANDLE g_evShutdown = nullptr;
+static void EnsureIpc();
+
 // ────────────────────────── 小工具 ──────────────────────────
 
 static double NowSec() { return GetTickCount64() / 1000.0; }
@@ -343,6 +348,8 @@ void StorageInit() {
 
     g_days.clear();
     for (const std::wstring& f : DataFiles()) LoadEventFile(f);
+
+    EnsureIpc();
 }
 
 void RecordKey(uint8_t vk) {
@@ -362,6 +369,86 @@ void StorageFlushIfDue() {
 }
 
 void StorageFlushNow() { FlushEvents(); }
+
+// ────────────────────────── 双进程协作 ──────────────────────────
+
+// CreateEvent 幂等：已存在时只是打开（GUI/记录进程谁先起都行）
+static void EnsureIpc() {
+    if (!g_evReload)   g_evReload   = CreateEventW(nullptr, TRUE, FALSE, kIpcReload);
+    if (!g_evShutdown) g_evShutdown = CreateEventW(nullptr, TRUE, FALSE, kIpcShutdown);
+}
+
+void StorageNotifyPeers() {
+    EnsureIpc();
+    if (g_evReload) SetEvent(g_evReload);
+}
+
+void StorageSignalShutdown() {
+    EnsureIpc();
+    if (g_evShutdown) SetEvent(g_evShutdown);
+}
+
+void StorageReloadFull() {
+    LoadDataPrefs();     // 数据文件夹/文件可能被 GUI 侧改过
+    g_evBuf.clear();     // 丢弃未落盘缓冲，与 GUI 看到的文件内容保持一致
+    g_days.clear();
+    for (const std::wstring& f : DataFiles()) LoadEventFile(f);
+}
+
+// 增量重载：记录进程每 5 秒追加落盘，GUI 只需把"新增的尾巴"读进来。
+// 文件集合或目录变化、文件变短（被清除/替换）时退回全量重载。
+void StorageReloadIfChanged() {
+    struct Pos { std::wstring path; long long size; };
+    static std::vector<Pos> s_pos;
+    static bool s_init = false;
+
+    const std::vector<std::wstring> files = DataFiles();
+
+    // 全量重载 + 重建位置快照
+    auto reloadFull = [&] {
+        StorageReloadFull();
+        s_pos.clear();
+        for (const std::wstring& p : DataFiles()) {
+            WIN32_FILE_ATTRIBUTE_DATA a = {};
+            if (GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &a))
+                s_pos.push_back({p, ((long long)a.nFileSizeHigh << 32) | a.nFileSizeLow});
+        }
+        s_init = true;
+    };
+
+    if (!s_init) { reloadFull(); return; }
+
+    // 文件集合变化（新增/删除/切换目录）→ 全量
+    bool full = files.size() != s_pos.size();
+    if (!full) {
+        for (size_t i = 0; i < files.size(); ++i)
+            if (!SamePath(files[i], s_pos[i].path)) { full = true; break; }
+    }
+    if (full) { reloadFull(); return; }
+
+    // 逐文件读新增尾巴（记录进程只追加不改写，所以从上次偏移读到 EOF 即可）
+    for (auto& pos : s_pos) {
+        WIN32_FILE_ATTRIBUTE_DATA a = {};
+        if (!GetFileAttributesExW(pos.path.c_str(), GetFileExInfoStandard, &a)) {
+            reloadFull();   // 文件消失（被清除）→ 全量
+            return;
+        }
+        const long long sz = ((long long)a.nFileSizeHigh << 32) | a.nFileSizeLow;
+        if (sz == pos.size) continue;
+        if (sz < pos.size) { reloadFull(); return; }   // 被清空/替换
+        FILE* f = _wfopen(pos.path.c_str(), L"rb");
+        if (f) {
+            _fseeki64(f, pos.size, SEEK_SET);
+            char line[256];
+            while (fgets(line, sizeof line, f)) {
+                uint32_t ymd; int hour; uint8_t vk;
+                if (ParseEventLine(line, &ymd, &hour, &vk)) ApplyEvent(ymd, hour, vk, 1);
+            }
+            fclose(f);
+        }
+        pos.size = sz;
+    }
+}
 
 // ────────────────────────── 时间段查询 ──────────────────────────
 
@@ -571,6 +658,7 @@ long StorageAdoptJsonl(const std::wstring& path, std::wstring* error) {
     // 3) 切换为当前数据文件并重新载入
     app::PrefSetValue(L"ui-data.txt", "file", app::Narrow(destName).c_str());
     StorageInit();
+    StorageNotifyPeers();
 
     long total = 0;
     for (auto& [day, d] : g_days) total += d.total;
@@ -632,6 +720,7 @@ bool StorageSetDataFolder(const std::wstring& dir, bool moveFiles, std::wstring*
     app::PrefSetValue(L"ui-data.txt", "dir", app::Narrow(dir).c_str());
     app::PrefSetValue(L"ui-data.txt", "file", app::Narrow(g_dataFile).c_str());
     StorageInit();
+    StorageNotifyPeers();
     return true;
 }
 
@@ -662,6 +751,7 @@ bool StorageCreateDataFile(std::wstring* createdName, std::wstring* error) {
 
     app::PrefSetValue(L"ui-data.txt", "file", app::Narrow(fileName).c_str());
     StorageInit();
+    StorageNotifyPeers();
 
     if (createdName) *createdName = fileName;
     (void)error;
@@ -677,6 +767,7 @@ bool StorageSetDataFile(const std::wstring& name, std::wstring* error) {
     StorageFlushNow();
     app::PrefSetValue(L"ui-data.txt", "file", app::Narrow(name).c_str());
     StorageInit();
+    StorageNotifyPeers();
     return true;
 }
 
@@ -699,4 +790,7 @@ void StorageClearAll() {
     }
     // 旧版本遗留的 counts.json（现行版本不再写入，仅在此顺带清理）
     DeleteFileW((StorageSettingsDir() + L"\\counts.json").c_str());
+
+    // 通知记录进程：数据已清空，重载（顺带清它内存里的计数与未落盘缓冲）
+    StorageNotifyPeers();
 }

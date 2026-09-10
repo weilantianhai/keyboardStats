@@ -118,3 +118,27 @@ long StorageAdoptJsonl(const std::wstring& path, std::wstring* error);
 
 // 清除全部记录（清空当前数据 + 内存缓存；顺带清理旧版本遗留的 counts.json）
 void StorageClearAll();
+
+// ────────────────────────── 双进程协作（GUI ⟷ 记录进程） ──────────────────────────
+// 记录进程（--record）负责钩子和落盘；GUI 进程只读数据文件。两边通过命名事件通信。
+// 事件在 StorageInit 时创建（CreateEvent 幂等，另一进程直接按名打开同名对象）。
+
+// GUI 侧：数据文件被记录进程更新后增量重载内存缓存（只读新增部分，毫秒级）。
+// 由 GUI 的定时器周期调用；兜底自记录模式下不要调用（会把自己的数据读重）。
+void StorageReloadIfChanged();
+
+// 全量重载：重读数据位置偏好 + 清内存缓存 + 重新读全部数据文件。
+// 记录进程收到 Reload 事件时调用；也用于兜底场景。
+void StorageReloadFull();
+
+// GUI 在改动数据（清除/切换文件夹/切换文件/转入/新建）后调用：通知记录进程重载
+void StorageNotifyPeers();
+
+// GUI "退出程序"时调用：通知记录进程落盘并退出
+void StorageSignalShutdown();
+
+// 进程间对象名（互斥/事件，本会话内）
+inline constexpr wchar_t kIpcRecorderMutex[] = L"Local\\KeyboardStats.Recorder";
+inline constexpr wchar_t kIpcGuiMutex[]      = L"Local\\KeyboardStats.Gui";
+inline constexpr wchar_t kIpcReload[]        = L"Local\\KeyboardStats.Reload";
+inline constexpr wchar_t kIpcShutdown[]      = L"Local\\KeyboardStats.Shutdown";
