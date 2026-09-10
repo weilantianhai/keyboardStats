@@ -1,17 +1,18 @@
-# 一键构建：产出单个静态链接的 KeyboardStats.exe（Win64）
+# KeyboardStats 一键构建（CMake + MinGW + EUI-NEO）
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$files = Get-ChildItem "$root\src" -Filter *.cpp | ForEach-Object { $_.FullName }
-if (-not $files) { Write-Error "src 目录下没有 .cpp 文件" }
-$out = Join-Path $root 'KeyboardStats.exe'
 
-& g++ -std=c++17 -O2 -municode -mwindows -static -s `
-    -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 `
-    -o $out @files `
-    -lgdi32 -luser32 -lshell32 -ladvapi32 -lcomctl32
+$cmake = "D:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+if (-not (Test-Path $cmake)) { Write-Error "未找到 CMake: $cmake"; exit 1 }
+$make = "D:\Program Files\mingw64\bin\mingw32-make.exe"
+if (-not (Test-Path $make)) { Write-Error "未找到 mingw32-make: $make"; exit 1 }
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "编译失败，退出码 $LASTEXITCODE"
-    exit 1
-}
-Write-Host "BUILD OK: $out"
+& $cmake -S $root -B "$root\build" -G "MinGW Makefiles" `
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$make"
+if ($LASTEXITCODE -ne 0) { exit 1 }
+
+& $cmake --build "$root\build" --parallel 8
+if ($LASTEXITCODE -ne 0) { exit 1 }
+
+Write-Host ""
+Write-Host "OK -> $root\build\KeyboardStats.exe"
