@@ -181,14 +181,12 @@ void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen) {
 
 void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const float top = 148.0f;
-    // Top10 右栏在宽窗口下固定占 250px，键盘只使用剩余区域；窄窗口隐藏右栏
-    const bool showTop10 = screen.width >= 980.0f;
-    const float railW = showTop10 ? 250.0f : 0.0f;
-    const float availW = screen.width - railW - 56.0f;
-    const float availH = screen.height - top - 70.0f;
+    // 下方预留：图例 + 按键次数直方图面板 + 底边距
+    const float availW = screen.width - 56.0f;
+    const float availH = screen.height - top - 210.0f;
     float u = std::min(availW / 24.0f, availH / 6.0f);
     u = std::clamp(u, 24.0f, 80.0f);   // 随窗口缩放，仅保留可用性下限
-    const float kx = (screen.width - railW - u * 24.0f) * 0.5f;
+    const float kx = (screen.width - u * 24.0f) * 0.5f;
     const float ky = top + 12.0f;
     const float gap = 2.0f;
 
@@ -234,66 +232,68 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .build();
 }
 
-void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen) {
-    const float x = screen.width - 250.0f;
-    const float y = 148.0f;
-    const float w = 226.0f;
-    const float h = screen.height - y - 24.0f;
+// 按键使用次数直方图：键盘正下方，按次数升序（左低右高），色条沿用热力渐变
+void DrawKeyHist(core::dsl::Ui& ui, const eui::Screen& screen) {
+    // 与 DrawHeatPage 相同的布局参数，保证面板与键盘对齐
+    const float top = 148.0f;
+    const float availW = screen.width - 56.0f;
+    const float availH = screen.height - top - 210.0f;
+    float u = std::min(availW / 24.0f, availH / 6.0f);
+    u = std::clamp(u, 24.0f, 80.0f);
+    const float kx = (screen.width - u * 24.0f) * 0.5f;
+    const float ky = top + 12.0f;
 
-    ui.rect("top.panel")
-        .x(x).y(y).size(w, h)
+    const float px = kx - 14.0f;
+    const float pw = u * 24.0f + 28.0f;
+    const float py = ky + u * 6.0f + 48.0f;            // 键盘面板底 + 图例行
+    const float ph = std::max(90.0f, std::min(150.0f, screen.height - py - 12.0f));
+
+    ui.rect("keyhist.panel")
+        .x(px).y(py).size(pw, ph)
         .color(g_theme.panel)
         .radius(12.0f)
         .border(1.0f, g_theme.border)
         .build();
-    ui.text("top.title")
-        .x(x + 16.0f).y(y + 12.0f).size(w - 32.0f, 24.0f)
-        .text("Top 10")
-        .fontSize(17.0f).lineHeight(22.0f)
-        .color(g_theme.text)
+    ui.text("keyhist.title")
+        .x(px + 16.0f).y(py + 10.0f).size(pw - 32.0f, 20.0f)
+        .text("按键使用次数分布（左 → 右 升序）")
+        .fontSize(14.0f).lineHeight(18.0f)
+        .color(g_theme.textMut)
         .build();
 
-    float rowY = y + 46.0f;
-    const float rowH = std::min(30.0f, (h - 60.0f) / 10.0f);
-    int rank = 1;
-    for (const TopEntry& e : g_top) {
-        std::string id = "top.row." + std::to_string(rank);
-        ui.text(id + ".name")
-            .x(x + 16.0f).y(rowY).size(w * 0.55f, rowH)
-            .text(std::to_string(rank) + ". " + e.name)
-            .fontSize(14.0f).lineHeight(rowH)
-            .color(g_theme.text)
-            .build();
-        ui.text(id + ".count")
-            .x(x + w * 0.55f).y(rowY).size(w - w * 0.55f - 16.0f, rowH)
-            .text(WithCommas(e.count))
-            .fontSize(14.0f).lineHeight(rowH)
-            .color(g_theme.textMut)
-            .horizontalAlign(core::HorizontalAlign::Right)
-            .build();
-        ui.rect(id + ".bar.bg")
-            .x(x + 16.0f).y(rowY + rowH - 4.0f)
-            .size(w - 32.0f, 2.0f)
-            .color(Hex(0x232A3A))
-            .radius(1.0f)
-            .build();
-        ui.rect(id + ".bar")
-            .x(x + 16.0f).y(rowY + rowH - 4.0f)
-            .size((w - 32.0f) * e.frac, 2.0f)
-            .color(g_theme.selected)
-            .radius(1.0f)
-            .transition(Motion())
-            .animate(core::AnimProperty::Frame)
-            .build();
-        rowY += rowH + 4.0f;
-        ++rank;
-    }
-    if (g_top.empty()) {
-        ui.text("top.empty")
-            .x(x + 16.0f).y(rowY).size(w - 32.0f, 24.0f)
+    if (g_keyHist.empty()) {
+        ui.text("keyhist.empty")
+            .x(px + 16.0f).y(py + 40.0f).size(pw - 32.0f, 24.0f)
             .text("暂无数据，去打几个字吧")
             .fontSize(14.0f).lineHeight(20.0f)
             .color(g_theme.textMut)
+            .build();
+        return;
+    }
+
+    const float pad = 14.0f;
+    const float barsTop = py + 38.0f;
+    const float barsBottom = py + ph - 12.0f;
+    const float barsH = std::max(20.0f, barsBottom - barsTop);
+    const float innerW = pw - pad * 2.0f;
+    const int n = (int)g_keyHist.size();
+    float barW = innerW / (float)n;
+    barW = std::clamp(barW, 3.0f, 20.0f);
+    const float groupW = barW * (float)n;
+    const float startX = px + pad + std::max(0.0f, (innerW - groupW) * 0.5f);
+
+    for (int i = 0; i < n; ++i) {
+        const TopEntry& e = g_keyHist[(size_t)i];
+        const float frac = std::clamp(e.frac, 0.0f, 1.0f);
+        const float bh = std::max(2.0f, barsH * frac);
+        const std::string id = "keyhist.bar." + std::to_string(i);
+        ui.rect(id)
+            .x(startX + (float)i * barW).y(barsBottom - bh)
+            .size(std::max(2.0f, barW - 2.0f), bh)
+            .color(HeatColor(frac))   // 与键帽热力同一语义：蓝 → 黄 → 红
+            .radius(2.0f)
+            .transition(Motion())
+            .animate(core::AnimProperty::Frame)
             .build();
     }
 }

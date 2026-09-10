@@ -20,7 +20,7 @@ extern RangeStats g_stats;
 extern long g_maxKey;
 extern std::vector<float> g_barVals;
 extern std::vector<std::string> g_barLabels;
-extern std::vector<TopEntry> g_top;
+extern std::vector<TopEntry> g_keyHist;   // 非零按键按次数升序（frac=次数/最大值）
 extern std::string g_rangeText;
 
 extern eui::Signal<bool> g_fromOpen;

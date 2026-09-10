@@ -31,7 +31,7 @@ RangeStats g_stats;
 long g_maxKey = 0;
 std::vector<float> g_barVals;
 std::vector<std::string> g_barLabels;
-std::vector<TopEntry> g_top;
+std::vector<TopEntry> g_keyHist;
 std::string g_rangeText;
 
 eui::Signal<bool> g_fromOpen{false};
@@ -85,17 +85,18 @@ void FetchStats() {
         g_barLabels.push_back(Utf8(b.label));
     }
 
-    g_top.clear();
-    std::vector<std::pair<long, int>> ranked;   // (count, vk)
+    g_keyHist.clear();
+    std::vector<std::pair<long, int>> ranked;   // (count, vk)，降序
     for (int vk = 0; vk < 256; ++vk)
         if (s.counts[vk] > 0) ranked.push_back({s.counts[vk], vk});
     std::sort(ranked.begin(), ranked.end(),
               [](const auto& a, const auto& b) { return a.first > b.first; });
     long top1 = ranked.empty() ? 0 : ranked.front().first;
-    for (size_t i = 0; i < ranked.size() && i < 10; ++i) {
-        g_top.push_back({Utf8(StatName((uint8_t)ranked[i].second)),
-                         ranked[i].first,
-                         top1 > 0 ? (float)ranked[i].first / (float)top1 : 0.0f});
+    // 直方图要求升序：倒序取用（最小 → 最大）
+    for (size_t i = ranked.size(); i > 0; --i) {
+        g_keyHist.push_back({Utf8(StatName((uint8_t)ranked[i - 1].second)),
+                             ranked[i - 1].first,
+                             top1 > 0 ? (float)ranked[i - 1].first / (float)top1 : 0.0f});
     }
 
     g_stats = std::move(s);
@@ -216,9 +217,7 @@ void compose(eui::Ui& ui, const eui::Screen& screen) {
             DrawControls(ui, screen);
             if (g_page == 0) {
                 DrawHeatPage(ui, screen);
-                if (screen.width >= 980.0f) {
-                    DrawTop10(ui, screen);
-                }
+                DrawKeyHist(ui, screen);
             } else {
                 DrawHistPage(ui, screen);
             }

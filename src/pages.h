@@ -7,7 +7,7 @@ namespace app {
 void DrawHeader(core::dsl::Ui& ui, float w);
 void DrawControls(core::dsl::Ui& ui, const eui::Screen& screen);
 void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen);
-void DrawTop10(core::dsl::Ui& ui, const eui::Screen& screen);
+void DrawKeyHist(core::dsl::Ui& ui, const eui::Screen& screen);
 void DrawHistPage(core::dsl::Ui& ui, const eui::Screen& screen);
 
 } // namespace app
