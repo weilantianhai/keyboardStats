@@ -234,3 +234,16 @@ plan/                  当初 UI 重写为 EUI-NEO 的方案存档
 
 - 数据文件合并：搬运时若遇重名会生成 `xxx-1.jsonl`，同一月份可能分成多个文件
   （统计会一起读，但看着不整齐）。
+
+---
+
+## 开源致谢与许可证
+
+本程序的图形界面基于开源框架 **[EUI-NEO](https://github.com/sudoevolve/EUI-NEO)**
+（Apache-2.0，作者 sudoevolve）构建；框架自带并静态链接了 GLFW、FreeType、libpng、
+zlib、glad、md4c、nanosvg、stb_image、tray、yyjson 等优秀开源组件。
+
+- 各组件的许可证与上游链接见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)；
+- 我们对 EUI-NEO 的本地修改（高分 DPI、字形图集自愈等）见上方「vendored 框架补丁」清单。
+
+依照 Apache-2.0 的要求，EUI-NEO 的许可证副本随分发（含 Release 压缩包）一并提供。
