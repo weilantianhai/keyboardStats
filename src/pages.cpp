@@ -1115,7 +1115,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
 
     // ── 行 2：字体大小滑块（无极）──
     // ── 行 1.5：管理员权限（游戏等高完整性窗口内也能记录）──
-    const float rowAdmin = y + Px(124.0f);
+    const float rowAdmin = y + Px(64.0f);
     ui.text("set.admin.label")
         .x(x + Px(24.0f)).y(rowAdmin).size(w - Px(230.0f), Px(30.0f))
         .text("管理员模式（游戏内也可记录，重启程序生效）")
@@ -1156,7 +1156,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         .build();
 
     // ── 行 2：开机自启动（只拉起记录程序 + 托盘图标，不带图形界面）──
-    const float rowAuto = y + Px(184.0f);
+    const float rowAuto = y + Px(124.0f);
     ui.text("set.autostart.label")
         .x(x + Px(24.0f)).y(rowAuto).size(w - Px(230.0f), Px(30.0f))
         .text("开机自启动（后台记录 + 托盘）")
@@ -1240,7 +1240,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         .build();
 
     // ── 自动开关行（字体大小行下方）：开关 + 说明合一 ──
-    const float rowAutoFont = y + h - Px(118.0f);
+    const float rowAutoFont = y + Px(268.0f);
     ui.stack("set.auto.row")
         .x(x + Px(24.0f)).y(rowAutoFont - Px(4.0f)).size(Px(120.0f), Px(38.0f))
         .content([&] {
