@@ -20,5 +20,9 @@ void DrawThemePage(core::dsl::Ui& ui, const eui::Screen& screen);
 void DrawCloseDialog(core::dsl::Ui& ui, const eui::Screen& screen);
 // 首次启动的自启动引导弹窗（显示在最上层，盖过其它弹窗）
 void DrawOnboardDialog(core::dsl::Ui& ui, const eui::Screen& screen);
+// 管理员开关闪烁引导是否进行中（app 的重绘驱动轮询用）
+bool AdminHighlightActive();
+// 调试：跳转设置页并触发管理员开关闪烁引导（--hladmin）
+void DebugHighlightAdmin();
 
 } // namespace app

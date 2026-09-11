@@ -435,6 +435,10 @@ const DslAppConfig& dslAppConfig() {
             const int n = _wtoi(p + 7);
             if (n >= 0 && n <= 3) g_page = n;
         }
+        // 调试用：--hladmin 启动即跳转设置页并触发管理员开关闪烁引导
+        if (wcsstr(GetCommandLineW(), L"--hladmin")) {
+            DebugHighlightAdmin();
+        }
         // 调试用：--pick=1/2 启动即打开主题色/热力色取色浮层
         if (const wchar_t* p = wcsstr(GetCommandLineW(), L"--pick=")) {
             const int n = _wtoi(p + 7);

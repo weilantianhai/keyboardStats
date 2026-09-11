@@ -312,6 +312,22 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
 
 } // namespace
 
+// 管理员开关的闪烁引导（主界面提示框点击后跳转设置页时置位）
+static bool g_adminHighlight = false;
+static unsigned long long g_adminHighlightAt = 0;
+static constexpr unsigned long long kAdminHighlightMs = 15000;   // 闪烁 15 秒后自动停止
+
+void DebugHighlightAdmin() {
+    g_page = 2;
+    g_adminHighlight = true;
+    g_adminHighlightAt = GetTickCount64();
+}
+
+bool AdminHighlightActive() {
+    return g_adminHighlight && !RunningElevated()
+        && (GetTickCount64() - g_adminHighlightAt) < kAdminHighlightMs;
+}
+
 void DrawHeader(core::dsl::Ui& ui, float w) {
     ui.text("hd.title")
         .x(Px(28.0f)).y(Px(12.0f)).size(w - Px(200.0f), Px(46.0f))
@@ -337,12 +353,11 @@ void DrawHeader(core::dsl::Ui& ui, float w) {
             .build();
     } else {
         MiniButton(ui, "hd.admin", w - Px(560.0f), Px(52.0f), Px(230.0f), Px(32.0f),
-                   "⚠ 未提权：游戏内无法记录 → 开启", false, [] {
-                       if (RelaunchAsAdmin()) {
-                           // 新的提权实例接管（coreReady 里等待本进程退出并升级记录进程）
-                           Sleep(600);
-                           ExitAppNow();
-                       }
+                   "⚠ 未提权：游戏内无法记录 → 去开启", false, [] {
+                       g_page = 2;                 // 跳转设置页
+                       g_adminHighlight = true;
+                       g_adminHighlightAt = GetTickCount64();
+                       app::requestUpdate();
                    });
     }
     const float bh = Px(34.0f), by = Px(22.0f);
@@ -1116,6 +1131,18 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
     // ── 行 2：字体大小滑块（无极）──
     // ── 行 1.5：管理员权限（游戏等高完整性窗口内也能记录）──
     const float rowAdmin = y + Px(64.0f);
+    // 闪烁引导：脉冲背景光 + 高亮边框，拨动开关或 15 秒后停止
+    if (AdminHighlightActive()) {
+        const double ph = std::sin(GetTickCount64() / 140.0);
+        const float glow = 0.10f + 0.14f * float(0.5 + 0.5 * ph);
+        ui.rect("set.admin.hl")
+            .x(x + Px(12.0f)).y(rowAdmin - Px(10.0f)).size(w - Px(24.0f), Px(56.0f))
+            .color(components::theme::withOpacity(g_theme.selected, glow))
+            .radius(Px(10.0f))
+            .border(1.5f, components::theme::withOpacity(g_theme.selected,
+                     0.45f + 0.4f * float(0.5 + 0.5 * ph)))
+            .build();
+    }
     ui.text("set.admin.label")
         .x(x + Px(24.0f)).y(rowAdmin).size(w - Px(230.0f), Px(30.0f))
         .text("管理员模式（游戏内也可记录，重启程序生效）")
@@ -1132,6 +1159,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
                 .theme(tk)
                 .transition(Motion())
                 .onChange([](bool v) {
+                    g_adminHighlight = false;   // 用户已操作，停止闪烁引导
                     if (!SetAdminModeFlagged(v)) {
                         s_recMsg = "设置失败（无法写入系统兼容性标记）";
                     } else if (v) {
