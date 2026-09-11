@@ -14,7 +14,6 @@
 #include "recorder.h"
 #include "pref.h"
 #include "win/adminmode.h"
-#include "win/autostart.h"
 
 #include <windows.h>
 #include <exception>
@@ -36,7 +35,6 @@ uint32_t g_customFrom = 0, g_customTo = 0;
 uint32_t g_pendingFrom = 0, g_pendingTo = 0;
 
 RangeStats g_stats;
-long g_maxKey = 0;
 std::vector<float> g_barVals;
 std::vector<std::string> g_barLabels;
 std::vector<TopEntry> g_keyHist;
@@ -44,7 +42,7 @@ std::string g_rangeText;
 
 eui::Signal<bool> g_fromOpen{false};
 eui::Signal<bool> g_toOpen{false};
-int g_keyFilter = 2;   // 按键计数筛选：0=键盘 1=鼠标 2=全部 3=分开
+// 按键筛选 g_keyFilter 与四个峰值定义在 heatnorm.cpp（统计层）
 
 static bool g_startHidden = false;
 static bool g_uiServicesReady = false;
@@ -90,8 +88,9 @@ void FetchStats() {
 
     RangeStats s = QueryRange(g_rangeMode, from, to);
 
-    g_maxKey = 0;
-    for (int vk = 0; vk < 256; ++vk) g_maxKey = std::max(g_maxKey, s.counts[vk]);
+    // 峰值不只是一个数：全局峰值供"全部"模式跨组对比，另外三组各自留一份，
+    // 供键盘 / 鼠标 / 分开模式按组独立归一（滚轮不再碾压点击次数）。
+    HeatMaximaFromCounts(s.counts);
 
     // barChart 组件把 values 当作 0~1 比例（内部 clamp 后乘绘图高度），因此必须传
     // "次数 / 峰值"，否则每根非零柱都被钳到 1.0，显示满高且 tooltip 恒为 100%
@@ -114,7 +113,7 @@ void FetchStats() {
     // 这样小键盘数字（1`、2`…）即使在未使用/NumLock 关闭时也能在直方图中被识别。
     g_keyHist.clear();
     {
-        std::vector<std::tuple<long, std::string, bool>> all;
+        std::vector<std::tuple<long, std::string, bool, uint8_t>> all;
         std::vector<uint8_t> seen;
         auto add = [&](uint8_t vk) {
             for (uint8_t s : seen) if (s == vk) return;   // 主键区/小键盘的回车等重复键码
@@ -122,7 +121,7 @@ void FetchStats() {
             const wchar_t* nm = StatName(vk);
             all.push_back({(vk < 256) ? s.counts[vk] : 0,
                            nm ? Utf8(nm) : ("VK" + std::to_string(vk)),
-                           IsMouseKey(vk)});
+                           IsMouseKey(vk), vk});
         };
         for (int i = 0; i < kKeyCount; ++i) add(kKeys[i].vk);
         for (uint8_t vk : {kMouseLeft, kMouseRight, kMouseMiddle, kMouseX1, kMouseX2,
@@ -132,7 +131,7 @@ void FetchStats() {
         std::stable_sort(all.begin(), all.end(),
                          [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
         for (const auto& kv : all) {
-            g_keyHist.push_back({std::get<1>(kv), std::get<0>(kv),
+            g_keyHist.push_back({std::get<3>(kv), std::get<1>(kv), std::get<0>(kv),
                                  top1 > 0 ? (float)std::get<0>(kv) / (float)top1 : 0.0f,
                                  std::get<2>(kv)});
         }
@@ -407,9 +406,13 @@ const DslAppConfig& dslAppConfig() {
         (void)guiMutex;   // 持有至进程退出
 
         // ── 确保记录进程在跑；拉不起来则 GUI 兜底自己记录（老行为）──
-        // 提权实例接管时，先把普通权限的旧记录进程终结并重新拉起（升级为高完整性，
-        // 管理员窗口/反作弊游戏内也能记录）。
-        if (RunningElevated()) KillOtherInstances();
+        // 提权实例接管时：先请普通权限的旧记录进程**优雅下场**（落盘 + 注销托盘），
+        // 再终结漏网的旧实例，最后拉起高完整性记录进程（管理员窗口/反作弊游戏内
+        // 也能记录）。直接 Kill 会丢掉它缓冲里最多 5 秒的按键，托盘图标也会突兀消失。
+        if (RunningElevated()) {
+            RecorderShutdownGracefully(1500);
+            KillOtherInstances();
+        }
         g_selfRecording = !EnsureRecorderRunning();
         if (g_selfRecording) InstallHook();
         atexit([] {
@@ -420,13 +423,6 @@ const DslAppConfig& dslAppConfig() {
         StorageInit();
         LoadThemePref();   // 先于 config 求值，clearColor 才能拿到正确的主题底色
         LoadFontPref();    // 字体缩放偏好（自动/自定义）
-
-        // 自启动已开启且本进程已提权、而管理员模式标记存在时：把计划任务升级为最高权限
-        // （管理员开关刚开启、或旧任务仍是普通权限的场景）。幂等，重复执行无害。
-        if (RunningElevated() && AdminModeFlagged() && AutostartEnabled()) {
-            AutostartSet(false);
-            AutostartSet(true);
-        }
 
         g_startHidden = wcsstr(GetCommandLineW(), L"--background") != nullptr;
 

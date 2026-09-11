@@ -11,6 +11,7 @@ add_executable(KeyboardStats
     src/theme.cpp
     src/fontscale.cpp
     src/pages.cpp
+    src/heatnorm.cpp         # 热力归一化（纯逻辑，无框架依赖）
     src/recorder.cpp
     src/win/autostart.cpp
     src/win/adminmode.cpp

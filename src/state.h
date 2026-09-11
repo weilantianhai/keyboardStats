@@ -1,6 +1,8 @@
 #pragma once
 // UI 运行状态：GLFW 主线程单线程访问，页面/服务共享
 #include "storage.h"
+#include "heatnorm.h"      // 峰值（g_maxKey/g_maxKeyboard/g_maxMouseClick/g_maxWheel）
+                           // 与筛选 g_keyFilter、归一化 HeatNorm
 #include "eui/signal.h"
 
 #include <cstdint>
@@ -10,9 +12,10 @@
 namespace app {
 
 struct TopEntry {
+    uint8_t vk = 0;         // 虚拟键码（热力归一化分组用）
     std::string name;
     long count = 0;
-    float frac = 0.0f;
+    float frac = 0.0f;      // 相对全局峰值的比例（直方图页分布图用）
     bool isMouse = false;   // 鼠标/滚轮伪键（用于分区显示与筛选）
 };
 
@@ -23,17 +26,15 @@ extern uint32_t g_customFrom, g_customTo;    // 已应用的 yyyymmdd
 extern uint32_t g_pendingFrom, g_pendingTo;  // 日期选择器中未应用的值
 
 extern RangeStats g_stats;
-extern long g_maxKey;
+// 峰值与筛选：定义在 heatnorm.cpp（统计层），见 heatnorm.h
 extern std::vector<float> g_barVals;
 extern std::vector<std::string> g_barLabels;
-extern std::vector<TopEntry> g_keyHist;   // 非零按键按次数升序（frac=次数/最大值）
+extern std::vector<TopEntry> g_keyHist;   // 非零按键按次数升序（frac=次数/全局峰值）
 extern std::string g_rangeText;
 
 extern eui::Signal<bool> g_fromOpen;
 extern eui::Signal<bool> g_toOpen;
 
-// 按键计数筛选：0=键盘 1=鼠标 2=全部 3=分开（左键盘右鼠标）
-extern int g_keyFilter;
 
 // ── 关闭行为（点 × 时）──
 // 0=每次询问 1=直接最小化到托盘 2=直接退出程序

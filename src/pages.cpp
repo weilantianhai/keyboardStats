@@ -94,8 +94,8 @@ void SaveLayoutPref(const char* key, float value) {
 int s_resizeDriver = 0;
 // 叠放状态（带滞回，避免拖动尺寸时在并排/叠放间来回跳）
 bool s_heatStacked = false;
-// 按键计数列表的独立筛选：0=键盘 1=鼠标 2=全部 3=分开
-int s_listFilter = 2;
+// 按键筛选（键盘/鼠标/全部/分开）已统一为全局的 g_keyFilter（见 state.h）：
+// 热力图着色、右侧按键计数列表、直方图页分布图三处共用同一个值。
 
 // 内盒右下角外侧的尺寸指示器：按住左键拖动无极调节（松手存档）
 void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
@@ -166,7 +166,8 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
                               float bx, float by, float bw, float bh, float radiusK,
                               const std::string& glyph = std::string(), float glyphK = 0.5f) {
                 const long c = (vk < 256) ? g_stats.counts[vk] : 0;
-                double t = g_maxKey > 1 ? (double)c / (double)g_maxKey : 0.0;
+                // 归一化随筛选模式：键盘/鼠标/分开按各自组峰值，全部共用全局峰值
+                double t = HeatNorm(vk, c);
                 if (c > 0 && t < 0.08) t = 0.08;
                 core::Color fill = HeatColor(t);
                 // 实时按下反馈：物理按下时键面向主题色亮化（按住期间持续保持）
@@ -646,7 +647,8 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         for (int i = 0; i < n; ++i) {
             const KeyDef& k = kKeys[i];
             long cnt = (k.vk < 256) ? g_stats.counts[k.vk] : 0;
-            double t = g_maxKey > 1 ? (double)cnt / (double)g_maxKey : 0.0;
+            // 归一化随筛选模式（见 app::HeatNorm）：三组可各自独立求峰值
+            double t = HeatNorm(k.vk, cnt);
             if (cnt > 0 && t < 0.08) t = 0.08;
             DrawKeycap(c, i, kbX + k.x * u + gap, k.y * u + gap,
                        k.w * u - gap * 2.0f, k.h * u - gap * 2.0f, cnt, t, innerW, drawH);
@@ -750,7 +752,7 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
     MiniButton(ui, "list.collapse", x + w - Px(76.0f), y + Px(10.0f), Px(60.0f), Px(30.0f),
                "收起", false, [] { s_top10Open = false; app::requestUpdate(); });
 
-    // 列表自己的筛选标签（与直方图筛选互不影响）
+    // 按键筛选：与热力图着色、直方图页共用同一个全局值（切换即时生效）
     const float filtY = y + Px(48.0f);
     const float filtW = std::max(Px(120.0f), w - Px(24.0f));
     const bool showFilter = filtW >= Px(190.0f);   // 面板过窄时隐藏，保持"全部"
@@ -761,10 +763,10 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
                 components::segmented(ui, "seg.listfilter")
                     .size(filtW, Px(32.0f))
                     .items({"键盘", "鼠标", "全部", "分开"})
-                    .selected(s_listFilter)
+                    .selected(g_keyFilter)
                     .theme(CurrentTheme())
                     .transition(Motion())
-                    .onChange([](int v) { s_listFilter = v; app::requestUpdate(); })
+                    .onChange([](int v) { g_keyFilter = v; app::requestUpdate(); })
                     .build();
             })
             .build();
@@ -796,19 +798,19 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
                     rows.push_back({&e, std::string()});
                 }
             };
-            if (s_listFilter == 3) {
+            if (g_keyFilter == 3) {
                 rows.push_back({nullptr, "键盘"});
                 pushDesc(false);
                 rows.push_back({nullptr, "鼠标"});
                 pushDesc(true);
-            } else if (s_listFilter == 2) {
+            } else if (g_keyFilter == 2) {
                 for (int k = (int)g_keyHist.size() - 1; k >= 0; --k) {
                     const TopEntry& e = g_keyHist[(size_t)k];
                     if (e.count <= 0) continue;
                     rows.push_back({&e, std::string()});
                 }
             } else {
-                pushDesc(s_listFilter == 1);
+                pushDesc(g_keyFilter == 1);
             }
 
             if (rows.empty()) {
@@ -860,7 +862,9 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
                             .build();
                         cui.rect(id + ".bar")
                             .x(0.0f).y(rowH - Px(4.0f))
-                            .size(contentW * e.frac, 2.0f)
+                            // 条宽与热力图同一套归一化：分开模式下两段各自满格，
+                            // 键盘/鼠标/全部模式也随筛选即时变化
+                            .size(contentW * (float)HeatNorm(e.vk, e.count), 2.0f)
                             .color(g_theme.selected)
                             .radius(1.0f)
                             .build();

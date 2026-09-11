@@ -18,11 +18,15 @@ namespace {
 constexpr UINT WM_TRAY = WM_APP + 1;   // 托盘回调消息
 constexpr int  IDM_SHOW = 1;
 constexpr int  IDM_EXIT = 2;
+constexpr UINT_PTR kTrayRetryTimer = 3;   // 托盘添加失败的重试定时器
+constexpr int  kTrayRetryMax = 30;        // 最多重试 30 次（2 秒一次 → 约 1 分钟）
 
 HWND s_wnd = nullptr;
 NOTIFYICONDATAW s_nid = {};
 UINT s_taskbarCreated = 0;
 HICON s_icon = nullptr;
+bool s_trayAdded = false;   // 图标当前是否真的在托盘里（NIM_ADD 成功过）
+int  s_trayTries = 0;
 
 // exe 同级 assets\icon.png（与 GUI 窗口图标同源）。GDI+ 只在取图标瞬间使用后关闭。
 static std::wstring AssetIconPath() {
@@ -59,7 +63,12 @@ static HICON LoadAppIcon() {
     return LoadIconW(nullptr, (LPCWSTR)IDI_APPLICATION);   // 兜底：系统图标
 }
 
-static void TrayAdd() {
+// 挂托盘图标。返回 true = 图标确实在托盘里了。
+// 原实现忽略 Shell_NotifyIconW 的返回值：开机自启动时记录进程可能**早于 Explorer**
+// 起来，NIM_ADD 会失败，于是"自启动后托盘里一直查无图标"。现在失败会被发现并由
+// 定时器重试（Explorer 起来后即挂上），Explorer 重启也能靠 TaskbarCreated 重挂。
+static bool TrayAdd() {
+    if (s_trayAdded) return true;
     ZeroMemory(&s_nid, sizeof s_nid);
     s_nid.cbSize = sizeof s_nid;
     s_nid.hWnd = s_wnd;
@@ -68,7 +77,9 @@ static void TrayAdd() {
     s_nid.uCallbackMessage = WM_TRAY;
     s_nid.hIcon = s_icon;
     lstrcpynW(s_nid.szTip, L"KeyboardStats 记录中（点右键操作）", ARRAYSIZE(s_nid.szTip));
-    Shell_NotifyIconW(NIM_ADD, &s_nid);
+    if (!Shell_NotifyIconW(NIM_ADD, &s_nid)) return false;
+    s_trayAdded = true;
+    return true;
 }
 
 // 唤起已运行的 GUI 主窗口；没有就启动一个（同 exe 不带参数）
@@ -109,13 +120,15 @@ static void ShowGui() {
 static void ShutdownRecorder() {
     RemoveHook();
     StorageFlushNow();
-    Shell_NotifyIconW(NIM_DELETE, &s_nid);
+    if (s_trayAdded) Shell_NotifyIconW(NIM_DELETE, &s_nid);
+    s_trayAdded = false;
     PostQuitMessage(0);
 }
 
 static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == s_taskbarCreated) {   // Explorer 重启后托盘图标要重挂
-        TrayAdd();
+        s_trayAdded = false;
+        if (!TrayAdd()) SetTimer(h, kTrayRetryTimer, 2000, nullptr);
         return 0;
     }
     switch (msg) {
@@ -142,6 +155,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             // wp=1：落盘节流（storage 内部 5 秒一写）；wp=2：GUI 侧控制事件
             if (wp == 1) {
                 StorageFlushIfDue();
+            } else if (wp == kTrayRetryTimer) {
+                // 托盘添加失败后的重试（等 Explorer 就绪）
+                if (TrayAdd()) {
+                    KillTimer(h, kTrayRetryTimer);
+                } else if (++s_trayTries >= kTrayRetryMax) {
+                    KillTimer(h, kTrayRetryTimer);   // 放弃：不要永远每 2 秒试一次
+                }
             } else if (wp == 2) {
                 // 权限必须带 EVENT_MODIFY_STATE：ResetEvent 靠它。只用 SYNCHRONIZE 打开的话
                 // ResetEvent 会静默失败，事件永远保持 signaled，每 300ms 就把记录缓冲清一次
@@ -205,7 +225,11 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
     s_taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     s_icon = LoadAppIcon();
-    TrayAdd();
+    if (!TrayAdd()) {
+        // 开机自启场景：记录进程常常比 Explorer 先起来，此刻 NIM_ADD 会失败。
+        // 起一个重试定时器，等任务栏就绪后补挂（否则这台机器整个会话都没有托盘图标）。
+        SetTimer(s_wnd, kTrayRetryTimer, 2000, nullptr);
+    }
 
     SetTimer(s_wnd, 1, 500, nullptr);   // 落盘节流
     SetTimer(s_wnd, 2, 300, nullptr);   // 控制事件轮询
@@ -218,12 +242,28 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     ExitProcess(0);
 }
 
-bool EnsureRecorderRunning() {
-    // 已经在跑？
+bool RecorderRunning() {
+    // 只问互斥体在不在，不打开对方进程（跨完整性级别也不需要额外权限）
     if (HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, kIpcRecorderMutex)) {
         CloseHandle(m);
         return true;
     }
+    return false;
+}
+
+bool RecorderShutdownGracefully(int ms) {
+    if (!RecorderRunning()) return true;
+    StorageSignalShutdown();   // 记录进程 300ms 轮询到这个事件后会落盘 + 注销托盘 + 退出
+    for (int waited = 0; waited < ms; waited += 50) {
+        Sleep(50);
+        if (!RecorderRunning()) return true;
+    }
+    return false;   // 还活着：调用方随后用 KillOtherInstances 兜底
+}
+
+bool EnsureRecorderRunning() {
+    // 已经在跑？
+    if (RecorderRunning()) return true;
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --record";
@@ -242,10 +282,7 @@ bool EnsureRecorderRunning() {
     // 等记录进程挂上互斥（最多 ~2 秒）
     for (int i = 0; i < 20; ++i) {
         Sleep(100);
-        if (HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, kIpcRecorderMutex)) {
-            CloseHandle(m);
-            return true;
-        }
+        if (RecorderRunning()) return true;
     }
     return false;
 }

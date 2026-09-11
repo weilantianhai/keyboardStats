@@ -69,11 +69,27 @@ inline constexpr uint8_t kWheelDown = 0xE1;
 inline constexpr uint8_t kWheelLeft = 0xE2;
 inline constexpr uint8_t kWheelRight = 0xE3;
 
-// 是否为鼠标/滚轮伪键（用于分区统计与筛选）
-inline bool IsMouseKey(uint8_t vk) {
+// 鼠标点击键（左/右/中/侧键）——不含滚轮
+inline bool IsMouseButton(uint8_t vk) {
     return vk == kMouseLeft || vk == kMouseRight || vk == kMouseMiddle ||
-           vk == kMouseX1 || vk == kMouseX2 || vk == kWheelUp || vk == kWheelDown ||
-           vk == kWheelLeft || vk == kWheelRight;
+           vk == kMouseX1 || vk == kMouseX2;
+}
+
+// 滚轮键（上/下/左/右）——单独一组，避免滚轮格数碾压点击次数
+inline bool IsWheelKey(uint8_t vk) {
+    return vk == kWheelUp || vk == kWheelDown || vk == kWheelLeft || vk == kWheelRight;
+}
+
+// 是否为鼠标/滚轮伪键（用于分区统计与筛选）
+inline bool IsMouseKey(uint8_t vk) { return IsMouseButton(vk) || IsWheelKey(vk); }
+
+// 热力归一化分组：三组各自独立求峰值（见 app::HeatNorm）
+enum class KeyGroup { Keyboard, MouseButton, Wheel };
+
+inline KeyGroup KeyGroupOf(uint8_t vk) {
+    if (IsWheelKey(vk)) return KeyGroup::Wheel;
+    if (IsMouseButton(vk)) return KeyGroup::MouseButton;
+    return KeyGroup::Keyboard;
 }
 
 inline constexpr int kKeyCount = sizeof(kKeys) / sizeof(kKeys[0]);
