@@ -22,10 +22,23 @@
 
 ### 统计与展示
 
-- **热力图**：104 键 ANSI 布局按频次着色（灰=未用 → 热力色阶），键帽上显示次数；右侧 Top 10 排行
+- **热力图**：104 键 ANSI 布局按频次着色（灰=未用 → 热力色阶），键帽上显示次数；右侧按键计数列表
 - **直方图**：按时段自动聚合（今天→每小时，7/30 天→每天，全部→每月）
 - **时段切换**：`今天 / 7 天 / 30 天 / 全部` 分段切换，`自定义` 可选日期段
-- **按键筛选**：键盘 / 鼠标 / 全部 / 分开（左右分区）
+- **按键筛选**：键盘 / 鼠标 / 全部 / 分开——一处切换，**热力图着色与右侧列表同时生效**
+- **分组归一化**（分组统计层见 `src/heatnorm.cpp`）：峰值不是一个全局值，而是
+  **键盘组 / 鼠标点击组（左右中侧键）/ 滚轮组（上下左右）** 各一份，着色按筛选模式取除数：
+
+  | 筛选 | 键盘键 | 鼠标点击 | 滚轮 | 说明 |
+  |---|---|---|---|---|
+  | 键盘 | 按键盘组峰值 | 灰 | 灰 | 只看键盘，鼠标图形保持灰 |
+  | 鼠标 | 灰 | 按点击组峰值 | 按滚轮组峰值 | 滚轮不与点击互相碾压 |
+  | 全部 | 共用全局峰值 | 共用全局峰值 | 共用全局峰值 | 跨组对比（原行为） |
+  | 分开 | 按键盘组峰值 | 按点击组峰值 | 按滚轮组峰值 | 三组各自拉满对比度 |
+
+  未按键恒为灰；颜色反转、平方根分档都在归一化**之后**照常生效。滚轮单独成组是为了
+  避免"滚轮格数动辄上万"把几十次的鼠标点击压成一片接近零的冷色（同一份数据下分开模式
+  让点击的对比度提高约一个数量级）。
 - 键盘翻页：`←` `→` `PgUp` `PgDn`
 - **主页看板**（键鼠区上方）：活跃分数（键盘+鼠标+滚轮×0.1，今日）、今日键盘、
   今日鼠标、滚轮格数（今日）、使用天数、活跃天数
@@ -51,9 +64,16 @@
 
 ### 开机自启动
 
-设置页开关，创建**计划任务**（登录触发 + 最高权限）：开机由系统服务**静默提权**启动
-无界面记录进程 + 托盘图标（约 2 MB），不弹窗口、游戏内也可记录。开启/关闭有核验，
-失败会明确提示；首次启动会弹窗引导开启。
+设置页开关（首次启动也会引导），写注册表 `HKCU\...\Run`：值为 `"<exe 全路径>" --record`，
+**写完立即读回逐字节核验**，失败会明确提示原因而不是只说"操作失败"。开机只启动无界面
+记录进程 + 托盘图标（不弹窗口），提权由「管理员模式」写入的 `RUNASADMIN` 兼容性标记承担
+（Windows 启动该 exe 时自动提权，静默完成）。关闭开关 = 删键值并顺手清理早期版本留下的
+计划任务残留，避免两种机制同时生效造成双重启动。
+
+> 早期版本用 `schtasks` 创建计划任务实现自启动，有两个坑叠加：`/TR` 里的内嵌引号
+> （路径带空格必需）经 `CreateProcess` 传递后转义规则不一致会直接报参数错误；
+> `/RL HIGHEST` 在未提权进程里创建会被拒绝——于是"有时成功、有时失败"。
+> 现已弃用该方案（仅保留"清理残留"这一处调用，且先查任务定义文件，不存在就不起子进程）。
 
 ### 主题系统（独立"主题"页）
 
@@ -96,9 +116,11 @@
 
 ```bash
 build\KeyboardStats.exe                 # 图形界面（会自动确保后台记录进程在跑）
-build\KeyboardStats.exe --record        # 无界面记录进程（自启动用），只在托盘，约 2 MB
+build\KeyboardStats.exe --record        # 无界面记录进程（自启动用），只在托盘
 build\KeyboardStats.exe --page=3        # 调试用：直接打开指定页面（0热力图 1直方图 2设置 3主题）
 build\KeyboardStats.exe --pick=2        # 调试用：启动即打开热力色取色浮层（1=主题色）
+build\KeyboardStats.exe --filter=3      # 调试用：启动即选中按键筛选（0键盘 1鼠标 2全部 3分开），
+                                        #   用来按模式核对热力着色
 ```
 
 ---
@@ -175,18 +197,25 @@ src/app.cpp            应用入口：运行状态、统计服务（500ms 刷新
 src/theme.cpp          配色方案（10 套）、热力方案（6 套）、自定义色推导、偏好持久化
 src/fontscale.cpp      字体/控件缩放策略（自动=跟随窗口宽度 / 自定义=设置页滑块），
                        量化 + 防抖，持久化到 ui-font.txt
-src/pages.cpp          页面绘制：头部、控制行、热力图页、Top 10、直方图页、设置页、
-                       主题页、按键次数直方图、关窗确认弹窗
+src/heatnorm.cpp       热力归一化（统计层）：全局/键盘/鼠标点击/滚轮四个峰值 + 按
+                       筛选模式取除数。**纯逻辑零框架依赖**，可脱离 GUI 单独验证
+src/pages.cpp          头部、控制行、主页看板、热力图页、按键计数列表
+src/pages_common.cpp   跨页面共享的小构件与状态（Px/MiniButton/ScrollArea/闪烁引导）
+src/pages_hist.cpp     直方图页（时段柱状图 + 按键使用次数分布）
+src/pages_settings.cpp 设置页（管理员模式/自启动/字体/记录管理）
+src/pages_theme.cpp    主题页 + 自实现 HSL 取色浮层
+src/pages_dialogs.cpp  关窗确认弹窗 / 首次启动自启动引导
 src/recorder.cpp       无界面记录进程（--record）：钩子+落盘+托盘图标（GDI+ 生成图标），
                        托盘菜单「打开 KeyboardStats」启动/唤起 GUI，「退出」优雅收尾
 src/state.h            共享运行状态与 FetchStats 声明
 src/pref.h             偏好文件读写（header-only，不依赖框架，数据层也能用）
 src/ui_util.h          通用小工具（颜色/编码/格式化，header-only）
-src/win/autostart.cpp  开机自启动注册表逻辑
+src/win/autostart.cpp  开机自启动：注册表 Run 键写入 + 读回核验（见上文）
+src/win/adminmode.cpp  管理员模式：RUNASADMIN 兼容性标记 + 提权重启 + 接管旧实例
 src/win/filedialog.h   打开/保存/文件夹选择对话框（header-only）
 src/hook.cpp           WH_KEYBOARD_LL / WH_MOUSE_LL 低级钩子（只观察不拦截）
 src/storage.cpp        数据位置解析、事件缓冲落盘、按日聚合、时段查询、记录管理
-src/layout.h           104 键 ANSI 布局表 + 键名映射 + 鼠标伪键码
+src/layout.h           104 键 ANSI 布局表 + 键名映射 + 鼠标伪键码 + 键位分组判定
 src/timeutil.cpp       公历日期算法（Howard Hinnant）、时间格式化
 assets/icon.png        托盘/窗口图标
 build.ps1              CMake 一键构建
@@ -194,7 +223,18 @@ tests/                 数据层、注册表、记录管理、默认目录解析
 plan/                  当初 UI 重写为 EUI-NEO 的方案存档
 ```
 
+> `src/pages.cpp` 原先是一个 2300 行的单体（设置页/主题页/直方图/弹窗全在里面），
+> 现按页面拆成 6 个 TU + 1 个共享件文件，`pages.cpp` 降到约 820 行。拆分是**纯代码搬运**，
+> 行为未变；跨文件共享的只有 `Px/FormatScale/ControlsY/ContentTop/MiniButton/ScrollArea/
+> ScrollThumb` 与 3 个状态量（声明都在 `pages_common.h`）。
+> 热力图着色与右侧列表的"联动"就是把原先两处**互相独立**的筛选控件（列表的
+> `s_listFilter` 与直方图页的 `g_keyFilter`）合并成了同一个 `g_keyFilter`。
+
 ### vendored 框架补丁（`.vendor/` 不受版本控制，升级框架时需重放）
+
+> 实际改动 **6 个文件**（`git -C .vendor/eui-neo diff --stat` 可复核）；
+> 想留成可重放的补丁，用 `git -C .vendor/eui-neo diff > patches/eui-neo.patch` 导出即可
+> （框架代码必须编译进产物，无法"搬出"；能搬出的是**差异**，不是代码）。
 
 1. `core/app/glfw_app_main.cpp` → `getDpiScale()`：由 framebuffer/window 比例推导缩放，
    避免 OS 报告的缩放与真实 framebuffer 不一致导致渲染与命中判定错位。
@@ -208,6 +248,12 @@ plan/                  当初 UI 重写为 EUI-NEO 的方案存档
    `glfwWaitEvents` 内，主循环无法出帧。现在把「更新+渲染一帧」提取为 `renderOnce` 并通过
    `g_liveResizeRender` 暴露给 framebuffer-size / window-refresh 回调（重入保护、首帧保护、
    6ms 限频）。同时 `src/app.cpp` 在 `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` 间冻结字号缩放。
+5. `core/platform/platform.cpp`、`core/render/image_source.cpp`、`core/render/text.cpp` 的
+   `executableDirectory()` 与 `include/eui/detail/dsl_app_impl.h` 的 `resolveIconPath()`
+   → **中文路径崩溃根修**：libstdc++ 的 `std::filesystem` 在 Windows 按 UTF-8 解释窄字符路径，
+   而 `GetModuleFileNameA` 返回的是 GBK 字节（非法 UTF-8）→ `fs::path` 转换 fail-fast
+   （`0xC0000409`）。改走 `GetModuleFileNameW` + `WideCharToMultiByte(CP_UTF8)` 显式转码。
+   （`src/app.cpp` 里的 `ExeDirA()` 是同一处理的自身版本。）
 
 ---
 

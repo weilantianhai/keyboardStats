@@ -440,6 +440,12 @@ const DslAppConfig& dslAppConfig() {
             const int n = _wtoi(p + 7);
             if (n >= 1 && n <= 2) g_debugPick = n;
         }
+        // 调试用：--filter=N 启动即选中按键筛选（0键盘 1鼠标 2全部 3分开）。
+        // 用于按筛选模式截图核对热力着色（哪种模式哪个区域该着色）。
+        if (const wchar_t* p = wcsstr(GetCommandLineW(), L"--filter=")) {
+            const int n = _wtoi(p + 9);
+            if (n >= 0 && n <= 3) g_keyFilter = n;
+        }
         return true;
     }();
     (void)coreReady;

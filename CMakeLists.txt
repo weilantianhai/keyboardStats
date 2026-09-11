@@ -10,7 +10,13 @@ add_executable(KeyboardStats
     src/app.cpp
     src/theme.cpp
     src/fontscale.cpp
-    src/pages.cpp
+    # 页面按页拆分：共享小构件 + 各页面各一个 TU（原 pages.cpp 单体 2300 行）
+    src/pages.cpp            # 头部 / 控制行 / 主页看板 / 热力图页 / 按键计数列表
+    src/pages_common.cpp     # 跨页面共享的小构件与状态
+    src/pages_hist.cpp       # 直方图页
+    src/pages_settings.cpp   # 设置页（管理员/自启动/字体/记录管理）
+    src/pages_theme.cpp      # 主题页 + HSL 取色浮层
+    src/pages_dialogs.cpp    # 关窗确认 / 首启引导弹窗
     src/heatnorm.cpp         # 热力归一化（纯逻辑，无框架依赖）
     src/recorder.cpp
     src/win/autostart.cpp
