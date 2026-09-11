@@ -1066,7 +1066,7 @@ constexpr float kCustomPanelH  = 196.0f;
 // 两个面板的高度按"内容需要"固定，不随窗口高度压缩：
 // 之前按可用高度取比例，窗口一小面板就比内容矮，说明文字会和滑块叠在一起，
 // 底部的按钮也会被窗口裁掉。现在改为固定内容高度 + 外层滚动视图。
-constexpr float kFontPanelH = 322.0f;
+constexpr float kFontPanelH = 366.0f;   // 含底部「说明文档」行
 constexpr float kRecPanelH  = 276.0f;
 constexpr float kPanelGap   = 12.0f;
 
@@ -1204,13 +1204,29 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
 
     // ── 行 3：说明 ──
     ui.text("set.hint")
-        .x(x + Px(24.0f)).y(y + h - Px(60.0f)).size(w - Px(48.0f), Px(42.0f))
+        .x(x + Px(24.0f)).y(y + h - Px(104.0f)).size(w - Px(48.0f), Px(42.0f))
         .text("自动：字号随窗口宽度缩放（宽窗口更大、窄窗口更小）。\n"
               "关闭自动后，可拖动滑块统一调整界面全部字体，设置会自动保存。")
         .fontSize(m.typography.caption)
         .lineHeight(Px(22.0f))
         .color(g_theme.textMut)
         .build();
+
+    // ── 行 4：说明文档（默认浏览器打开 GitHub 仓库的 README 页）──
+    const float rowDoc = y + h - Px(52.0f);
+    ui.text("set.doc.label")
+        .x(x + Px(24.0f)).y(rowDoc + Px(4.0f)).size(w - Px(48.0f) - Px(160.0f), Px(30.0f))
+        .text("说明文档：完整操作手册（在线页面）")
+        .fontSize(m.typography.body)
+        .lineHeight(Px(30.0f))
+        .color(g_theme.text)
+        .build();
+    MiniButton(ui, "set.doc", x + w - Px(174.0f), rowDoc - Px(4.0f), Px(150.0f), Px(38.0f),
+               "打开说明文档", false, [] {
+                   ShellExecuteW(nullptr, L"open",
+                                 L"https://github.com/weilantianhai/keyboardStats#readme",
+                                 nullptr, nullptr, SW_SHOWNORMAL);
+               });
 
 }
 
@@ -2162,7 +2178,7 @@ void DrawOnboardDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
         .x(dx + Px(26.0f)).y(dy + Px(66.0f)).size(dw - Px(52.0f), Px(110.0f))
         .text("开启后，电脑开机时会自动在后台记录键鼠使用，\n"
               "无需手动打开程序，安心无忧。\n"
-              "后台记录只占约 18 MB 内存，托盘图标随时可\n"
+              "后台记录只占约 2 MB 内存，托盘图标随时可\n"
               "以打开主窗口查看统计。")
         .fontSize(m.typography.body)
         .lineHeight(Px(24.0f))
