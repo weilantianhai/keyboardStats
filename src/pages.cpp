@@ -1086,7 +1086,7 @@ constexpr float kCustomPanelH  = 196.0f;
 // 两个面板的高度按"内容需要"固定，不随窗口高度压缩：
 // 之前按可用高度取比例，窗口一小面板就比内容矮，说明文字会和滑块叠在一起，
 // 底部的按钮也会被窗口裁掉。现在改为固定内容高度 + 外层滚动视图。
-constexpr float kFontPanelH = 444.0f;   // 含管理员开关行、说明文档行与框架署名
+constexpr float kFontPanelH = 480.0f;   // 含管理员开关行、说明文档行与框架署名
 constexpr float kRecPanelH  = 276.0f;
 constexpr float kPanelGap   = 12.0f;
 
@@ -1138,9 +1138,9 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
 
     // ── 行 2：字体大小滑块（无极）──
     // ── 行 1.5：管理员权限（游戏等高完整性窗口内也能记录）──
-    const float rowAdmin = y + Px(64.0f);
+    const float rowAdmin = y + Px(124.0f);
     ui.text("set.admin.label")
-        .x(x + Px(24.0f)).y(rowAdmin).size(w * 0.62f, Px(30.0f))
+        .x(x + Px(24.0f)).y(rowAdmin).size(w - Px(230.0f), Px(30.0f))
         .text("管理员模式（游戏内也可记录，重启程序生效）")
         .fontSize(m.typography.body)
         .lineHeight(Px(30.0f))
@@ -1152,7 +1152,6 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
             components::toggleSwitch(ui, "set.admin")
                 .size(Px(136.0f), Px(38.0f))
                 .checked(AdminModeFlagged())
-                .text("管理员")
                 .theme(tk)
                 .transition(Motion())
                 .onChange([](bool v) {
@@ -1180,9 +1179,9 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         .build();
 
     // ── 行 2：开机自启动（只拉起记录程序 + 托盘图标，不带图形界面）──
-    const float rowAuto = y + Px(120.0f);
+    const float rowAuto = y + Px(184.0f);
     ui.text("set.autostart.label")
-        .x(x + Px(24.0f)).y(rowAuto).size(w * 0.62f, Px(30.0f))
+        .x(x + Px(24.0f)).y(rowAuto).size(w - Px(230.0f), Px(30.0f))
         .text("开机自启动（后台记录 + 托盘）")
         .fontSize(m.typography.body)
         .lineHeight(Px(30.0f))
@@ -1194,7 +1193,6 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
             components::toggleSwitch(ui, "set.autostart")
                 .size(Px(136.0f), Px(38.0f))
                 .checked(AutostartEnabled())
-                .text("自启动")
                 .theme(tk)
                 .transition(Motion())
                 .onChange([](bool v) {
@@ -1208,7 +1206,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         })
         .build();
 
-    const float row2 = y + Px(236.0f);
+    const float row2 = y + Px(248.0f);
     const float sliderW = w - Px(48.0f) - Px(110.0f);
     const float shown = g_fontAuto ? AutoScaleForWidth(screenWidth) : g_fontCustom;
     ui.text("set.slider.label")
