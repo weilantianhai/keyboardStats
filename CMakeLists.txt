@@ -13,9 +13,11 @@ add_executable(KeyboardStats
     src/pages.cpp
     src/recorder.cpp
     src/win/autostart.cpp
+    src/win/adminmode.cpp
     src/hook.cpp
     src/storage.cpp
     src/timeutil.cpp
+    src/resources/app.rc    # 应用清单：requireAdministrator（游戏等高完整性窗口下也可记录）
 )
 eui_neo_configure_app(KeyboardStats)
 

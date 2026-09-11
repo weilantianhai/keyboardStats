@@ -12,8 +12,12 @@
 #include "ui_util.h"
 #include "fontscale.h"
 #include "recorder.h"
+#include "pref.h"
+#include "win/adminmode.h"
+#include "win/autostart.h"
 
 #include <windows.h>
+#include <exception>
 
 #include <algorithm>
 #include <cstring>
@@ -348,11 +352,13 @@ static void EnsureUiServices() {
 }
 
 static std::string ExeDirA() {
-    char buf[MAX_PATH] = {};
-    GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    std::string p = buf;
-    size_t s = p.find_last_of("\\/");
-    return s == std::string::npos ? std::string() : p.substr(0, s + 1);
+    // 宽字符 API + Narrow(UTF-8)：libstdc++ filesystem 按 UTF-8 解释窄路径，
+    // GBK 字节路径（exe 在中文目录）会在资源解析时 abort
+    wchar_t buf[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    std::wstring p(buf);
+    size_t s = p.find_last_of(L"\\/");
+    return s == std::wstring::npos ? std::string() : Narrow(p.substr(0, s + 1));
 }
 
 static std::string AssetAbs(const char* name) { return ExeDirA() + "assets\\" + name; }
@@ -362,21 +368,48 @@ static std::string AssetAbs(const char* name) { return ExeDirA() + "assets\\" + 
 const DslAppConfig& dslAppConfig() {
     // 入口分流/单实例/存储/钩子：必须在窗口出现前完成（静态初始化器时机最早）
     static const bool coreReady = [] {
+        // 无声 abort（如路径编码 fail-fast）落盘留痕，避免"崩得毫无线索"
+        std::set_terminate([] {
+            const std::wstring path = app::PrefDirPath() + L"\\terminate-report.txt";
+            if (FILE* f = _wfopen(path.c_str(), L"ab")) {
+                SYSTEMTIME t;
+                GetLocalTime(&t);
+                fprintf(f, "[%04u-%02u-%02u %02u:%02u:%02u] std::terminate / fail-fast (pid %lu)\n",
+                        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond,
+                        GetCurrentProcessId());
+                fclose(f);
+            }
+            abort();
+        });
+
         // ── 无界面记录进程：--record → 钩子 + 落盘 + 托盘，不进 GUI（不返回）──
         if (wcsstr(GetCommandLineW(), L"--record")) {
             RecorderRun();
             return false;
         }
 
-        // ── GUI 单实例：已有主窗口就唤起它，然后退出 ──
+        // ── GUI 单实例：已有实例时等待其退出（管理员重启流程中旧实例会延迟退出），
+        //    超时后按旧行为唤起已有窗口并退出 ──
         HANDLE guiMutex = CreateMutexW(nullptr, TRUE, kIpcGuiMutex);
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            RecorderShowGui();   // 找到已有窗口 → 前台；没有窗口（异常残留）就静默退
-            ExitProcess(0);
+            const bool elevatedNow = RunningElevated();
+            for (int i = 0; i < 40 && elevatedNow; ++i) {   // 提权重启接管：最多等 4 秒
+                CloseHandle(guiMutex);
+                Sleep(100);
+                guiMutex = CreateMutexW(nullptr, TRUE, kIpcGuiMutex);
+                if (GetLastError() != ERROR_ALREADY_EXISTS) break;
+            }
+            if (GetLastError() == ERROR_ALREADY_EXISTS) {
+                RecorderShowGui();   // 不是重启流程 → 唤起已有窗口
+                ExitProcess(0);
+            }
         }
         (void)guiMutex;   // 持有至进程退出
 
         // ── 确保记录进程在跑；拉不起来则 GUI 兜底自己记录（老行为）──
+        // 提权实例接管时，先把普通权限的旧记录进程终结并重新拉起（升级为高完整性，
+        // 管理员窗口/反作弊游戏内也能记录）。
+        if (RunningElevated()) KillOtherInstances();
         g_selfRecording = !EnsureRecorderRunning();
         if (g_selfRecording) InstallHook();
         atexit([] {
@@ -387,6 +420,13 @@ const DslAppConfig& dslAppConfig() {
         StorageInit();
         LoadThemePref();   // 先于 config 求值，clearColor 才能拿到正确的主题底色
         LoadFontPref();    // 字体缩放偏好（自动/自定义）
+
+        // 自启动已开启且本进程已提权、而管理员模式标记存在时：把计划任务升级为最高权限
+        // （管理员开关刚开启、或旧任务仍是普通权限的场景）。幂等，重复执行无害。
+        if (RunningElevated() && AdminModeFlagged() && AutostartEnabled()) {
+            AutostartSet(false);
+            AutostartSet(true);
+        }
 
         g_startHidden = wcsstr(GetCommandLineW(), L"--background") != nullptr;
 
@@ -410,7 +450,7 @@ const DslAppConfig& dslAppConfig() {
         .clearColor({g_theme.bg.r, g_theme.bg.g, g_theme.bg.b, 1.0f})
         .windowSize(1180, 720)
         .fps(60.0)
-        .iconPath(AssetAbs("icon.png"))
+        .iconPath("")   // DEBUG-CHINESE-PATH: temporary disable
         // 托盘属于记录进程（常驻的那个）；GUI 不再挂第二个图标
         .tray(false)
         .onKeyEvent([](const eui::KeyEvent& e) {

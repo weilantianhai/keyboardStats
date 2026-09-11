@@ -11,6 +11,7 @@
 #include "pref.h"
 #include "win/filedialog.h"
 #include "win/autostart.h"
+#include "win/adminmode.h"
 #include "hook.h"
 
 #include <shellapi.h>
@@ -325,6 +326,25 @@ void DrawHeader(core::dsl::Ui& ui, float w) {
         .fontSize(Px(19.0f)).lineHeight(Px(26.0f))
         .color(g_theme.textMut)
         .build();
+    // 管理员模式状态：未提权时在副标题右侧给出一键提权入口
+    // （管理员钩子是高完整性级别——管理员窗口、反作弊游戏（Valorant 等）内也能记录）
+    if (RunningElevated()) {
+        ui.text("hd.admin")
+            .x(w - Px(560.0f)).y(Px(60.0f)).size(Px(230.0f), Px(24.0f))
+            .text("● 管理员模式运行中（游戏内可记录）")
+            .fontSize(Px(14.0f)).lineHeight(Px(24.0f))
+            .color(Hex(0x22C55E))
+            .build();
+    } else {
+        MiniButton(ui, "hd.admin", w - Px(560.0f), Px(52.0f), Px(230.0f), Px(32.0f),
+                   "⚠ 未提权：游戏内无法记录 → 开启", false, [] {
+                       if (RelaunchAsAdmin()) {
+                           // 新的提权实例接管（coreReady 里等待本进程退出并升级记录进程）
+                           Sleep(600);
+                           ExitAppNow();
+                       }
+                   });
+    }
     const float bh = Px(34.0f), by = Px(22.0f);
     MiniButton(ui, "hd.top10", w - 306.0f, by, 160.0f, bh,
                s_top10Open ? "隐藏按键列表" : "显示按键列表", false,
@@ -1066,7 +1086,7 @@ constexpr float kCustomPanelH  = 196.0f;
 // 两个面板的高度按"内容需要"固定，不随窗口高度压缩：
 // 之前按可用高度取比例，窗口一小面板就比内容矮，说明文字会和滑块叠在一起，
 // 底部的按钮也会被窗口裁掉。现在改为固定内容高度 + 外层滚动视图。
-constexpr float kFontPanelH = 392.0f;   // 含底部「说明文档」行与框架署名
+constexpr float kFontPanelH = 444.0f;   // 含管理员开关行、说明文档行与框架署名
 constexpr float kRecPanelH  = 276.0f;
 constexpr float kPanelGap   = 12.0f;
 
@@ -1117,6 +1137,48 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         .build();
 
     // ── 行 2：字体大小滑块（无极）──
+    // ── 行 1.5：管理员权限（游戏等高完整性窗口内也能记录）──
+    const float rowAdmin = y + Px(64.0f);
+    ui.text("set.admin.label")
+        .x(x + Px(24.0f)).y(rowAdmin).size(w * 0.62f, Px(30.0f))
+        .text("管理员模式（游戏内也可记录，重启程序生效）")
+        .fontSize(m.typography.body)
+        .lineHeight(Px(30.0f))
+        .color(g_theme.text)
+        .build();
+    ui.stack("set.admin.row")
+        .x(x + w - Px(160.0f)).y(rowAdmin - Px(4.0f)).size(Px(136.0f), Px(38.0f))
+        .content([&] {
+            components::toggleSwitch(ui, "set.admin")
+                .size(Px(136.0f), Px(38.0f))
+                .checked(AdminModeFlagged())
+                .text("管理员")
+                .theme(tk)
+                .transition(Motion())
+                .onChange([](bool v) {
+                    if (!SetAdminModeFlagged(v)) {
+                        s_recMsg = "设置失败（无法写入系统兼容性标记）";
+                    } else if (v) {
+                        s_recMsg = "将以管理员权限重启…";
+                        s_recMsgAt = GetTickCount64() / 1000.0;
+                        app::requestUpdate();
+                        if (RelaunchAsAdmin()) {
+                            Sleep(600);          // 等新提权实例接管
+                            ExitAppNow();
+                            return;
+                        }
+                        SetAdminModeFlagged(false);   // 用户取消 UAC → 回滚
+                        s_recMsg = "已取消管理员授权，保持当前权限";
+                    } else {
+                        s_recMsg = "已关闭管理员模式，重启程序后生效";
+                    }
+                    s_recMsgAt = GetTickCount64() / 1000.0;
+                    app::requestUpdate();
+                })
+                .build();
+        })
+        .build();
+
     // ── 行 2：开机自启动（只拉起记录程序 + 托盘图标，不带图形界面）──
     const float rowAuto = y + Px(120.0f);
     ui.text("set.autostart.label")
@@ -1146,7 +1208,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         })
         .build();
 
-    const float row2 = y + Px(184.0f);
+    const float row2 = y + Px(236.0f);
     const float sliderW = w - Px(48.0f) - Px(110.0f);
     const float shown = g_fontAuto ? AutoScaleForWidth(screenWidth) : g_fontCustom;
     ui.text("set.slider.label")

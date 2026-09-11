@@ -21,7 +21,16 @@ SharedState* Shared() {
     static SharedState* shared = nullptr;
     static bool tried = false;
     if (!shared && !tried) {
-        HANDLE map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+        // 显式 NULL DACL（本机所有用户可访问）：程序以管理员运行时创建的共享内存
+        // 必须能被同机其它进程读取（GUI 按下动画依赖它），默认 DACL 可能拒绝跨完整性访问
+        SECURITY_ATTRIBUTES sa{};
+        SECURITY_DESCRIPTOR sd{};
+        InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION);
+        SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE);
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = &sd;
+        sa.bInheritHandle = FALSE;
+        HANDLE map = CreateFileMappingW(INVALID_HANDLE_VALUE, &sa, PAGE_READWRITE,
                                         0, sizeof(SharedState), kSharedMapName);
         if (map) {
             shared = (SharedState*)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedState));
