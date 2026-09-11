@@ -112,6 +112,26 @@
 
 > `build.ps1` 里 CMake 与 mingw32-make 的路径是写死的，换机器需要改这两行。
 
+### 打包发布
+
+```powershell
+.\pack.ps1 -Version v1.0.1          # 构建 + 打包（-SkipBuild 可只打包）
+```
+
+产出根目录下的 `KeyboardStats-<版本>-win64.zip`（exe + 完整 `assets\` + README/GUIDE/NOTICES）。
+
+> ⚠️ **运行时 assets 是必需品，不是可选的美化资源。** 界面字体不是嵌在 exe 里的：
+> 框架的 `resolveDefaultUiFontPath()` 会在 `<exe 目录>\assets\` 下找
+> `JingNanJunJunTi-JinNanJunJunTi-Bold-2.ttf`，找不到就**静默**退回系统字体
+> （Segoe UI / simhei；组件默认族名干脆就是 `Microsoft YaHei`）——症状就是"自己机器上
+> 好好的，别人机器上字体变成了微软雅黑"。这些字体由 CMake 的 `eui_neo_copy_assets`
+> 从 `.vendor/eui-neo/assets` 部署到 `build/assets/`，**和项目自己的 `assets/`（只有
+> icon.png）是两个来源**。手工打包时只 copy 项目 `assets/` 就会漏掉字体——v1.0/v1.0.1
+> 的包就是这么漏的（1.7 MB；带上字体后是 4.2 MB）。
+>
+> `pack.ps1` 因此整份复制 `build\assets`（开发机验证过能跑的那一套，不做裁剪），
+> 并在打包前后各校验一次关键资源（两个字体 + `icon.png`），缺任何一个直接失败。
+
 ### 运行
 
 ```bash
