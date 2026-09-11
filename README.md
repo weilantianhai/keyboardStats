@@ -6,6 +6,11 @@
 **C++17 + [EUI-NEO](https://github.com/sudoevolve/EUI-NEO) 声明式 UI 框架**（GLFW + OpenGL 渲染），
 单文件 exe、静态链接、无运行时 DLL 依赖、不做任何网络通信。
 
+### ⬇️ 下载
+
+[直接下载最新版](https://github.com/weilantianhai/keyboardStats/releases/latest/download/KeyboardStats-v1.0-win64.zip)
+（解压后运行 `KeyboardStats.exe`，免安装）· [所有版本](https://github.com/weilantianhai/keyboardStats/releases)
+
 > 📖 **完整操作说明**（界面导览 / 设置详解 / 数据管理 / 常见问题）见 **[docs/GUIDE.md](docs/GUIDE.md)**，
 > 也可在软件「设置」页点「打开说明文档」，或访问 [Wiki](https://github.com/weilantianhai/keyboardStats/wiki)。
 
