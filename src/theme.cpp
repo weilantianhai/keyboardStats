@@ -154,6 +154,7 @@ constexpr int kCustomHeat = kHeatCount;
 int  g_palette = 0;
 int  g_heat = 0;
 bool g_heatCustom = false;
+bool g_heatInvert = false;   // 颜色频率反转
 core::Color g_customAccent{0.22f, 0.45f, 0.85f, 1.0f};
 bool g_customDark = true;
 core::Color g_customHeatBase{0.15f, 0.55f, 0.85f, 1.0f};
@@ -433,6 +434,14 @@ core::Color CustomHeatBase() { return g_customHeatBase; }
 bool HeatIsCustom() { return g_heatCustom; }
 bool HeatUsesSqrtScale() { return g_heatCustom; }
 
+bool HeatInverted() { return g_heatInvert; }
+
+void SetHeatInverted(bool inverted) {
+    g_heatInvert = inverted;
+    PrefSetValue(L"ui-theme.txt", "invert", inverted ? "1" : "0");
+    app::requestUpdate();
+}
+
 core::Color HeatRampColor(const core::Color& lo, const core::Color& mid, const core::Color& hi,
                           double t) {
     if (t <= 0.0) return g_theme.idleKey;
@@ -451,9 +460,15 @@ core::Color HeatRampColor(const core::Color& lo, const core::Color& mid, const c
 }
 
 core::Color HeatColor(double t) {
-    if (t <= 0.0) return g_theme.idleKey;
+    if (t <= 0.0) return g_theme.idleKey;   // 未按键始终是 idle 灰，不参与反转
     // 自定义热力方案用平方根色阶：低频段的差异被拉开，小基数也能看出层次
     if (HeatUsesSqrtScale()) t = std::sqrt(std::clamp(t, 0.0, 1.0));
+    if (g_heatInvert) {
+        t = 1.0 - std::clamp(t, 0.0, 1.0);
+        // 满频键反转后正好落在色阶最低端（t=0），那是合法颜色而不是"未按键"，
+        // 给个极小值绕开 HeatRampColor 的 idle 分支
+        if (t <= 0.0) t = 0.0001;
+    }
     return HeatRampColor(g_theme.heatLo, g_theme.heatMid, g_theme.heatHi, t);
 }
 
@@ -473,6 +488,7 @@ void LoadThemePref() {
     g_heat = 0;
     for (int i = 0; i < kHeatCount; ++i)
         if (heat == kHeats[i].id) { g_heat = i; g_heatCustom = false; break; }
+    g_heatInvert = PrefGetValue(L"ui-theme.txt", "invert", "0") == "1";
 
     const std::string palette = PrefGetValue(L"ui-theme.txt", "palette", "");
     int index = -1;

@@ -661,6 +661,9 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     }
 
     // ── 图例（盒下方居中）──
+    // 反转模式下色块序列经 HeatColor 自动镜像（左=红=少值色，右=蓝=多值色），
+    // "少/多"文字**保持不变**——它标注的是当前映射下的颜色位置，语义仍然成立。
+    const bool inv = HeatInverted();
     const float ly = boxY + boxH + Px(18.0f);
     const float legendW = 8.0f * Px(22.0f) + Px(70.0f);
     const float lx = contentX + boxW * 0.5f - legendW * 0.5f;
@@ -682,6 +685,11 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .text("多").fontSize(Px(16.0f)).lineHeight(Px(20.0f))
         .color(g_theme.textMut)
         .build();
+    // 反转开关（图例右侧）：高频显低频色、低频显高频色
+    MiniButton(ui, "legend.invert", lx + legendW + Px(24.0f), ly - Px(9.0f),
+               Px(110.0f), Px(32.0f), inv ? "取消反转" : "反转颜色", false, [] {
+                   SetHeatInverted(!HeatInverted());
+               });
 }
 
 // 右侧按键列表：全部有记录的按键（含鼠标/滚轮）按次数降序，内容超出高度即自动出滚动条

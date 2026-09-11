@@ -57,6 +57,8 @@ void         SetCustomHeatBase(core::Color base);
 core::Color  CustomHeatBase();
 bool         HeatIsCustom();
 bool         HeatUsesSqrtScale();               // 自定义方案用平方根色阶（低频段更易区分）
+bool         HeatInverted();                    // 颜色频率反转：高频显低频色、低频显高频色
+void         SetHeatInverted(bool inverted);    // 应用并持久化
 
 // 依据当前全部偏好重算 g_theme + 组件令牌
 void ApplyTheme();
