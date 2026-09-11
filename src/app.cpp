@@ -147,6 +147,12 @@ static bool StatsDiffer(const RangeStats& a, const RangeStats& b) {
     return false;
 }
 
+// 键鼠按下动画的驱动：框架是事件驱动渲染，按键状态变化不会自己触发重绘。
+// 16ms 轮询一次共享状态，只在"最近 1 秒内有按键事件"时请求重绘（平时开销≈0）。
+static void CALLBACK TickKeyAnim(HWND, UINT, UINT_PTR, DWORD) {
+    if (SharedKeyAlive()) app::requestUpdate();
+}
+
 // 周期任务：驱动落盘 + 数据节流刷新（单线程）
 static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     StorageFlushIfDue();
@@ -323,7 +329,10 @@ static void EnsureUiServices() {
     RegisterClassW(&wc);
     HWND msg = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                                nullptr, nullptr, nullptr);
-    if (msg) g_timerId = SetTimer(msg, 1, 500, TickTimer);
+    if (msg) {
+        g_timerId = SetTimer(msg, 1, 500, TickTimer);
+        SetTimer(msg, 2, 16, TickKeyAnim);   // 按下动画驱动
+    }
 
     FetchStats();
 

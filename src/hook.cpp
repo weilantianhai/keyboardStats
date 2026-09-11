@@ -6,12 +6,81 @@
 static HHOOK s_hook = nullptr;
 static HHOOK s_mouseHook = nullptr;
 
-// 低级键盘钩子：只观察（不拦截），按键时计数 +1、事件入缓冲。
+// ── 实时按键状态共享内存 ──
+// 钩子所在进程（--record 记录进程，或兜底自记录的 GUI）写入；GUI 只读。
+// 布局：uint32 tick（最近一次事件的 GetTickCount）+ 256 字节状态（非 0=按下）。
+// tick 供 GUI 做超时消隐（滚轮没有"抬起"事件，靠它自动消失；也防 UP 丢失卡键）。
+namespace {
+struct SharedState {
+    unsigned long tick;
+    unsigned char state[256];
+};
+constexpr wchar_t kSharedMapName[] = L"Local\\KeyboardStats.KeyState";
+
+SharedState* Shared() {
+    static SharedState* shared = nullptr;
+    static bool tried = false;
+    if (!shared && !tried) {
+        HANDLE map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                        0, sizeof(SharedState), kSharedMapName);
+        if (map) {
+            shared = (SharedState*)MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(SharedState));
+            if (shared) {
+                shared->tick = GetTickCount();
+                ZeroMemory(shared->state, sizeof(shared->state));
+            }
+        }
+        tried = true;   // 创建失败不再重试（本进程负责写时才需要）
+    }
+    return shared;
+}
+
+void SetKeyState(unsigned char vk, bool down) {
+    SharedState* s = Shared();
+    if (!s) return;
+    s->state[vk] = down ? 1 : 0;
+    s->tick = GetTickCount();
+}
+} // namespace
+
+const unsigned char* SharedKeyState() {
+    // 只读方（GUI）：记录进程可能晚于 GUI 启动，按秒级间隔重试打开
+    static SharedState* view = nullptr;
+    static HANDLE map = nullptr;
+    static unsigned long lastFail = 0;
+    if (!view) {
+        const unsigned long now = GetTickCount();
+        if (now - lastFail < 1000) return nullptr;
+        lastFail = now;
+        map = OpenFileMappingW(FILE_MAP_READ, FALSE, kSharedMapName);
+        if (!map) return nullptr;
+        view = (SharedState*)MapViewOfFile(map, FILE_MAP_READ, 0, 0, sizeof(SharedState));
+        if (!view) { CloseHandle(map); map = nullptr; return nullptr; }
+    }
+    return view->state;
+}
+
+bool SharedKeyAlive() {
+    // 供 GUI 判断"最近 1 秒内是否有键按下"（有才需要重绘动画）。
+    // view 指向 SharedState 开头，state 前面正好是 tick。
+    const unsigned char* st = SharedKeyState();
+    if (!st) return false;
+    const unsigned long tick = *reinterpret_cast<const volatile unsigned long*>(st - 4);
+    return (GetTickCount() - tick) < 1000;
+}
+
+// 低级键盘钩子：只观察（不拦截），按键时计数 +1、事件入缓冲、写实时状态。
 // 注意：回调里绝不做磁盘 I/O（落盘由定时器统一处理）。
 static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wp, LPARAM lp) {
-    if (code == HC_ACTION && (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN)) {
-        DWORD vk = ((KBDLLHOOKSTRUCT*)lp)->vkCode;
-        if (vk < 256) RecordKey((uint8_t)vk);
+    if (code == HC_ACTION) {
+        const DWORD vk = ((KBDLLHOOKSTRUCT*)lp)->vkCode;
+        if (vk >= 256) return CallNextHookEx(s_hook, code, wp, lp);
+        if (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN) {
+            RecordKey((uint8_t)vk);
+            SetKeyState((uint8_t)vk, true);
+        } else if (wp == WM_KEYUP || wp == WM_SYSKEYUP) {
+            SetKeyState((uint8_t)vk, false);
+        }
     }
     return CallNextHookEx(s_hook, code, wp, lp);
 }
@@ -21,20 +90,32 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wp, LPARAM lp) {
 static LRESULT CALLBACK LowLevelMouseProc(int code, WPARAM wp, LPARAM lp) {
     if (code == HC_ACTION) {
         const MSLLHOOKSTRUCT* ms = (const MSLLHOOKSTRUCT*)lp;
+        unsigned char vk = 0;
+        bool up = false;
         switch (wp) {
-            case WM_LBUTTONDOWN: RecordKey(kMouseLeft); break;
-            case WM_RBUTTONDOWN: RecordKey(kMouseRight); break;
-            case WM_MBUTTONDOWN: RecordKey(kMouseMiddle); break;
+            case WM_LBUTTONDOWN: vk = kMouseLeft; break;
+            case WM_LBUTTONUP:   vk = kMouseLeft; up = true; break;
+            case WM_RBUTTONDOWN: vk = kMouseRight; break;
+            case WM_RBUTTONUP:   vk = kMouseRight; up = true; break;
+            case WM_MBUTTONDOWN: vk = kMouseMiddle; break;
+            case WM_MBUTTONUP:   vk = kMouseMiddle; up = true; break;
             case WM_XBUTTONDOWN:
-                RecordKey(HIWORD(ms->mouseData) == XBUTTON1 ? kMouseX1 : kMouseX2);
-                break;
+                vk = HIWORD(ms->mouseData) == XBUTTON1 ? kMouseX1 : kMouseX2; break;
+            case WM_XBUTTONUP:
+                vk = HIWORD(ms->mouseData) == XBUTTON1 ? kMouseX1 : kMouseX2; up = true; break;
             case WM_MOUSEWHEEL:
-                RecordKey(GET_WHEEL_DELTA_WPARAM(ms->mouseData) > 0 ? kWheelUp : kWheelDown);
-                break;
+                vk = GET_WHEEL_DELTA_WPARAM(ms->mouseData) > 0 ? kWheelUp : kWheelDown; break;
             case WM_MOUSEHWHEEL:
-                RecordKey(GET_WHEEL_DELTA_WPARAM(ms->mouseData) > 0 ? kWheelRight : kWheelLeft);
-                break;
+                vk = GET_WHEEL_DELTA_WPARAM(ms->mouseData) > 0 ? kWheelRight : kWheelLeft; break;
             default: break;
+        }
+        if (vk) {
+            if (up) {
+                SetKeyState(vk, false);
+            } else {
+                RecordKey(vk);
+                SetKeyState(vk, true);   // 滚轮没有对应 UP，GUI 靠 tick 超时消隐
+            }
         }
     }
     return CallNextHookEx(s_mouseHook, code, wp, lp);

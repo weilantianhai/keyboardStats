@@ -11,6 +11,7 @@
 #include "pref.h"
 #include "win/filedialog.h"
 #include "win/autostart.h"
+#include "hook.h"
 
 #include <shellapi.h>
 
@@ -128,6 +129,15 @@ void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
 }
 
 // 鼠标盒子：面板 + 机身，左右键/中键/侧键/滚轮（含上滑 ^ 下滑 v 键）按次数着色
+// ── 实时按键状态（记录进程写入共享内存，GUI 只读） ──
+static bool KeyPressedNow(unsigned char vk) {
+    const unsigned char* st = SharedKeyState();
+    if (!st || !st[vk]) return false;
+    // state 前面是 uint32 tick：超过 1 秒没有新事件则视为过期（防 UP 丢失卡在按下态）
+    const unsigned long tick = *reinterpret_cast<const volatile unsigned long*>(st - 4);
+    return (GetTickCount() - tick) < 1000;
+}
+
 void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
     const auto tk = CurrentTheme();
     ui.stack("mouse.page")
@@ -157,11 +167,15 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
                 const long c = (vk < 256) ? g_stats.counts[vk] : 0;
                 double t = g_maxKey > 1 ? (double)c / (double)g_maxKey : 0.0;
                 if (c > 0 && t < 0.08) t = 0.08;
-                const core::Color fill = HeatColor(t);
+                core::Color fill = HeatColor(t);
+                // 实时按下反馈：物理按下时键面向主题色亮化（按住期间持续保持）
+                const bool pressed = KeyPressedNow(vk);
+                if (pressed) fill = core::mixColor(fill, g_theme.selected, 0.55f);
                 ui.rect(id)
                     .x(bx).y(by).size(bw, bh)
                     .color(fill)
                     .radius(std::min(bw, bh) * radiusK)
+                    .border(pressed ? 1.5f : 0.0f, g_theme.selected)
                     .states(fill,
                             core::mixColor(fill, Hex(0xFFFFFF), 0.15f),
                             core::mixColor(fill, Hex(0xFFFFFF), 0.25f))
@@ -175,7 +189,7 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
                         .text(glyph)
                         .fontSize(std::min(bw, bh) * glyphK)
                         .lineHeight(bh)
-                        .color(c > 0 ? Hex(0xFFFFFF) : g_theme.textMut)
+                        .color(c > 0 || pressed ? Hex(0xFFFFFF) : g_theme.textMut)
                         .horizontalAlign(core::HorizontalAlign::Center)
                         .verticalAlign(core::VerticalAlign::Center)
                         .build();
@@ -246,15 +260,23 @@ void SplitDivider(core::dsl::Ui& ui, float x, float y, float h, float contentX, 
 }
 
 void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
-                long count, double t) {
+                long count, double t, float boundsW, float boundsH) {
+    const auto tk = CurrentTheme();
     const std::string id = "key." + std::to_string(idx);
+    const uint8_t vk = kKeys[idx].vk;
     core::Color fill = HeatColor(t);
     core::Color edge = count > 0 ? core::Color{0, 0, 0, 0} : g_theme.idleEdge;
+    // 实时按下反馈：物理按下/按住时键面向主题色亮化并描边（与鼠标按键一致）
+    const bool pressed = KeyPressedNow(vk);
+    if (pressed) {
+        fill = core::mixColor(fill, g_theme.selected, 0.55f);
+        edge = g_theme.selected;
+    }
     ui.rect(id)
         .x(x).y(y).size(w, h)
         .color(fill)
         .radius(std::min(8.0f, h * 0.28f))
-        .border(1.0f, edge)
+        .border(pressed ? 1.5f : 1.0f, edge)
         .states(fill,
                 count > 0 ? core::mixColor(fill, Hex(0xFFFFFF), 0.10f) : g_theme.panelHi,
                 count > 0 ? core::mixColor(fill, Hex(0xFFFFFF), 0.18f) : Hex(0x2A3245))
@@ -270,11 +292,21 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
             .text(Utf8(cap))
             .fontSize(std::min(24.0f, std::max(10.0f, h * 0.32f)))
             .lineHeight(std::min(24.0f, std::max(10.0f, h * 0.32f)))
-            .color(count > 0 ? Hex(0xFFFFFF) : g_theme.textMut)
+            .color(count > 0 || pressed ? Hex(0xFFFFFF) : g_theme.textMut)
             .horizontalAlign(core::HorizontalAlign::Center)
             .verticalAlign(core::VerticalAlign::Center)
             .build();
     }
+    // 悬浮显示真实数据（与鼠标按键的悬浮一致）
+    components::tooltip(ui, id + ".tip")
+        .theme(tk)
+        .source(id)
+        .value(Utf8(StatName(vk)) + " " + WithCommas(count) + " 次")
+        .anchor(x + w * 0.5f, y)
+        .bounds(boundsW, boundsH)
+        .style(components::TooltipStyle(tk))
+        .zIndex(300)
+        .build();
 }
 
 } // namespace
@@ -582,7 +614,7 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
             double t = g_maxKey > 1 ? (double)cnt / (double)g_maxKey : 0.0;
             if (cnt > 0 && t < 0.08) t = 0.08;
             DrawKeycap(c, i, kbX + k.x * u + gap, k.y * u + gap,
-                       k.w * u - gap * 2.0f, k.h * u - gap * 2.0f, cnt, t);
+                       k.w * u - gap * 2.0f, k.h * u - gap * 2.0f, cnt, t, innerW, drawH);
         }
         // 键盘盒子尺寸指示器（右下角外侧；钳制在内容范围内，避免被裁剪）
         const float hs = Px(17.0f);
