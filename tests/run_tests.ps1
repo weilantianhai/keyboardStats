@@ -1,4 +1,4 @@
-# Regression tests: data layer (test_query) + autostart (test_autostart) + record management (test_records)
+﻿# Regression tests: data layer (test_query) + autostart (test_autostart) + record management (test_records)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot   # project root (this script lives in tests/)
 $gxx = "D:\Program Files\mingw64\bin\g++.exe"

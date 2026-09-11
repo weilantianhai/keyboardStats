@@ -1,4 +1,4 @@
-# KeyboardStats 一键构建（CMake + MinGW + EUI-NEO）
+﻿# KeyboardStats 一键构建（CMake + MinGW + EUI-NEO）
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 
