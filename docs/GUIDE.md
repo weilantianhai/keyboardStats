@@ -141,3 +141,11 @@
 
 **Q：想彻底删掉数据？**
 直接删除数据文件夹（或设置页「清除全部记录」）。卸载程序只需删除 exe 与数据文件夹、关闭自启动即可，无其它残留。
+
+---
+
+## 开源致谢
+
+本程序界面基于开源框架 [EUI-NEO](https://github.com/sudoevolve/EUI-NEO)（Apache-2.0）构建，
+并使用了 GLFW、FreeType、zlib、libpng 等开源组件。完整清单见仓库
+[`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md)。

@@ -1066,7 +1066,7 @@ constexpr float kCustomPanelH  = 196.0f;
 // 两个面板的高度按"内容需要"固定，不随窗口高度压缩：
 // 之前按可用高度取比例，窗口一小面板就比内容矮，说明文字会和滑块叠在一起，
 // 底部的按钮也会被窗口裁掉。现在改为固定内容高度 + 外层滚动视图。
-constexpr float kFontPanelH = 366.0f;   // 含底部「说明文档」行
+constexpr float kFontPanelH = 392.0f;   // 含底部「说明文档」行与框架署名
 constexpr float kRecPanelH  = 276.0f;
 constexpr float kPanelGap   = 12.0f;
 
@@ -1227,6 +1227,13 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
                                  L"https://github.com/weilantianhai/keyboardStats#readme",
                                  nullptr, nullptr, SW_SHOWNORMAL);
                });
+    ui.text("set.doc.credit")
+        .x(x + Px(24.0f)).y(rowDoc + Px(38.0f)).size(w - Px(48.0f), Px(20.0f))
+        .text("本程序界面基于开源框架 EUI-NEO (Apache-2.0, github.com/sudoevolve/EUI-NEO) 构建")
+        .fontSize(m.typography.caption)
+        .lineHeight(Px(20.0f))
+        .color(g_theme.textMut)
+        .build();
 
 }
 

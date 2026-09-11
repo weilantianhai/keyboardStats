@@ -6,3 +6,6 @@ build/
 *.obj
 .idea/
 .workbuddy/
+.verify/
+.verify/
+KeyboardStats-v*.zip
