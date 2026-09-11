@@ -1086,7 +1086,7 @@ constexpr float kCustomPanelH  = 196.0f;
 // 两个面板的高度按"内容需要"固定，不随窗口高度压缩：
 // 之前按可用高度取比例，窗口一小面板就比内容矮，说明文字会和滑块叠在一起，
 // 底部的按钮也会被窗口裁掉。现在改为固定内容高度 + 外层滚动视图。
-constexpr float kFontPanelH = 480.0f;   // 含管理员开关行、说明文档行与框架署名
+constexpr float kFontPanelH = 440.0f;   // 含管理员开关行、说明文档行与框架署名
 constexpr float kRecPanelH  = 276.0f;
 constexpr float kPanelGap   = 12.0f;
 
@@ -1111,29 +1111,6 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         .fontSize(m.typography.title)
         .lineHeight(m.typography.title + m.typography.lineGap)
         .color(g_theme.text)
-        .build();
-
-    // ── 行 1：自动开关 ──
-    const float row1 = y + Px(74.0f);
-    ui.text("set.auto.label")
-        .x(x + Px(24.0f)).y(row1).size(w * 0.5f, Px(30.0f))
-        .text("字体大小自适应窗口")
-        .fontSize(m.typography.body)
-        .lineHeight(Px(30.0f))
-        .color(g_theme.text)
-        .build();
-    ui.stack("set.auto.row")
-        .x(x + w - Px(160.0f)).y(row1 - Px(4.0f)).size(Px(136.0f), Px(38.0f))
-        .content([&] {
-            components::toggleSwitch(ui, "set.auto")
-                .size(Px(136.0f), Px(38.0f))
-                .checked(g_fontAuto)
-                .text("自动")
-                .theme(tk)
-                .transition(Motion())
-                .onChange([](bool v) { SetFontAuto(v); app::requestUpdate(); })
-                .build();
-        })
         .build();
 
     // ── 行 2：字体大小滑块（无极）──
@@ -1206,7 +1183,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         })
         .build();
 
-    const float row2 = y + Px(248.0f);
+    const float row2 = y + Px(184.0f);
     const float sliderW = w - Px(48.0f) - Px(110.0f);
     const float shown = g_fontAuto ? AutoScaleForWidth(screenWidth) : g_fontCustom;
     ui.text("set.slider.label")
@@ -1262,13 +1239,26 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         .horizontalAlign(core::HorizontalAlign::Right)
         .build();
 
-    // ── 行 3：说明 ──
-    ui.text("set.hint")
-        .x(x + Px(24.0f)).y(y + h - Px(104.0f)).size(w - Px(48.0f), Px(42.0f))
+    // ── 自动开关行（字体大小行下方）：开关 + 说明合一 ──
+    const float rowAutoFont = y + h - Px(118.0f);
+    ui.stack("set.auto.row")
+        .x(x + Px(24.0f)).y(rowAutoFont - Px(4.0f)).size(Px(120.0f), Px(38.0f))
+        .content([&] {
+            components::toggleSwitch(ui, "set.auto")
+                .size(Px(120.0f), Px(38.0f))
+                .checked(g_fontAuto)
+                .theme(tk)
+                .transition(Motion())
+                .onChange([](bool v) { SetFontAuto(v); app::requestUpdate(); })
+                .build();
+        })
+        .build();
+    ui.text("set.auto.label")
+        .x(x + Px(158.0f)).y(rowAutoFont - Px(2.0f)).size(w - Px(200.0f), Px(42.0f))
         .text("自动：字号随窗口宽度缩放（宽窗口更大、窄窗口更小）。\n"
-              "关闭自动后，可拖动滑块统一调整界面全部字体，设置会自动保存。")
+              "关闭后可拖动上方滑块统一调整界面全部字体。")
         .fontSize(m.typography.caption)
-        .lineHeight(Px(22.0f))
+        .lineHeight(Px(20.0f))
         .color(g_theme.textMut)
         .build();
 

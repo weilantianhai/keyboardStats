@@ -59,12 +59,11 @@ bool AdminModeFlagged() {
     HKEY k;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, kLayersKey, 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS)
         return false;
-    wchar_t buf[8] = {};
-    DWORD type = 0, size = sizeof buf;
-    const LONG r = RegQueryValueExW(k, ExePath().c_str(), nullptr, &type,
-                                    (BYTE*)buf, &size);
+    // 只判存在性（值数据 "~ RUNASADMIN" 有 28 字节，小缓冲查询会返回
+    // ERROR_MORE_DATA 导致误判"未开启"——UI 开关状态不变的根源）
+    DWORD type = 0, size = 0;
+    const LONG r = RegQueryValueExW(k, ExePath().c_str(), nullptr, &type, nullptr, &size);
     RegCloseKey(k);
-    // 值数据形如 "~ RUNASADMIN"，以 RUNASADMIN 结尾即视为开启
     return r == ERROR_SUCCESS && type == REG_SZ;
 }
 
