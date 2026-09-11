@@ -76,7 +76,12 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wp, LPARAM lp) {
         const DWORD vk = ((KBDLLHOOKSTRUCT*)lp)->vkCode;
         if (vk >= 256) return CallNextHookEx(s_hook, code, wp, lp);
         if (wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN) {
-            RecordKey((uint8_t)vk);
+            // 按住不放时 OS 会以 ~30ms 间隔反复发 KEYDOWN（自动重复）。
+            // 该键已处于按下态且状态很新 → 这是一次重复，只算一次，不重复计数。
+            // （3 秒兜底：万一 UP 丢失把状态卡在"按下"，之后仍能恢复计数。）
+            SharedState* s = Shared();
+            const bool repeat = s && s->state[vk] && (GetTickCount() - s->tick) < 3000;
+            if (!repeat) RecordKey((uint8_t)vk);
             SetKeyState((uint8_t)vk, true);
         } else if (wp == WM_KEYUP || wp == WM_SYSKEYUP) {
             SetKeyState((uint8_t)vk, false);
