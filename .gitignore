@@ -1,0 +1,11 @@
+.vendor/
+build/
+.poc/build/
+.test-data/
+*.exe
+*.obj
+.idea/
+.workbuddy/
+.verify/
+.verify/
+KeyboardStats-v*.zip
