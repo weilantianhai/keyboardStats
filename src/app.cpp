@@ -482,7 +482,7 @@ const DslAppConfig& dslAppConfig() {
         .clearColor({g_theme.bg.r, g_theme.bg.g, g_theme.bg.b, 1.0f})
         .windowSize(1180, 720)
         .fps(60.0)
-        .iconPath("")   // DEBUG-CHINESE-PATH: temporary disable
+        .iconPath(AssetAbs("icon.png"))
         // 托盘属于记录进程（常驻的那个）；GUI 不再挂第二个图标
         .tray(false)
         .onKeyEvent([](const eui::KeyEvent& e) {

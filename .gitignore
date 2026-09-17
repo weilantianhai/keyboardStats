@@ -14,3 +14,5 @@ KeyboardStats-v*.zip
 .icons2/
 export-test.csv
 not-data.jsonl
+tools/fn-diag.log
+.diag/
