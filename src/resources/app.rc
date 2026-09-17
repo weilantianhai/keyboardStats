@@ -1,3 +1,9 @@
-// 嵌入应用程序清单：要求管理员权限运行（游戏等高完整性窗口下也能记录）
+// 应用资源：图标 + 应用程序清单
+//  - 图标（ID 1）：exe 文件图标（资源管理器/任务栏/快捷方式）；
+//    运行时窗口与托盘图标走 assets/icon.png（同一张图的不同尺寸）。
+//  - 清单：requestedExecutionLevel = asInvoker（默认普通权限）；
+//    管理员模式由设置页开关写入 AppCompatFlags 兼容标记控制。
 #include <winuser.h>
+
+1 ICON "app.ico"
 1 24 "app.manifest"

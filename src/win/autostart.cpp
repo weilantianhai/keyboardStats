@@ -4,6 +4,9 @@
 #include "adminmode.h"
 
 #include <windows.h>
+#include <sddl.h>
+#include <vector>
+#include <string>
 
 namespace {
 
@@ -47,7 +50,9 @@ int ReadTaskLevel() {
     CloseHandle(h);
     if (got < 4) return 0;
     const std::wstring text(buf, got / sizeof(wchar_t));
-    return text.find(L"<RunLevel>Highest</RunLevel>") != std::wstring::npos ? 1 : 2;
+    // 任务计划程序实际写出的值可能是 Highest 或 HighestAvailable（两者都表示最高权限，
+    // 后者是 schtasks /RL HIGHEST 的产物）——按前缀匹配，两者都算最高权限
+    return text.find(L"<RunLevel>Highest") != std::wstring::npos ? 1 : 2;
 }
 
 int TaskLevelCached() {
@@ -64,20 +69,42 @@ void InvalidateCache() {
     Cache().level = -1;
 }
 
-// 隐藏窗口执行命令并等待完成（仅用于开关切换/修复等一次性路径，不在渲染路径）
+// 最近一次隐藏命令的退出码与输出（诊断用：创建失败时写入错误日志）
+DWORD g_lastRunCode = 1;
+std::string g_lastRunOutput;
+
+// 隐藏窗口执行命令并等待完成（仅用于开关切换/修复等一次性路径，不在渲染路径）；
+// 捕获 stdout/stderr 供失败诊断（schtasks 的错误信息以 ANSI 输出）
 bool RunHidden(const std::wstring& cmd) {
+    SECURITY_ATTRIBUTES sa = { sizeof sa, nullptr, TRUE };
+    HANDLE rd = nullptr, wr = nullptr;
+    if (!CreatePipe(&rd, &wr, &sa, 0)) return false;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
     STARTUPINFOW si = {};
     si.cb = sizeof si;
-    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     si.wShowWindow = SW_HIDE;
+    si.hStdOutput = wr;
+    si.hStdError = wr;
     PROCESS_INFORMATION pi = {};
     std::wstring c = cmd;
-    if (!CreateProcessW(nullptr, c.data(), nullptr, nullptr, FALSE,
-                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    g_lastRunOutput.clear();
+    if (!CreateProcessW(nullptr, c.data(), nullptr, nullptr, TRUE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(rd);
+        CloseHandle(wr);
         return false;
+    }
+    CloseHandle(wr);
+    char buf[1024];
+    DWORD got = 0;
+    while (ReadFile(rd, buf, sizeof buf, &got, nullptr) && got > 0)
+        g_lastRunOutput.append(buf, got);
+    CloseHandle(rd);
     WaitForSingleObject(pi.hProcess, 20000);
     DWORD code = 1;
     GetExitCodeProcess(pi.hProcess, &code);
+    g_lastRunCode = code;
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return code == 0;
@@ -99,6 +126,28 @@ bool WriteUtf16File(const std::wstring& path, const std::wstring& text) {
     return true;
 }
 
+// 当前用户 SID（形如 S-1-5-21-...）：Highest 任务的 Principal 需要明确的用户身份，
+// 不指定时部分系统上 schtasks /XML 会以 exit 1 拒绝（且不输出细节）
+std::wstring CurrentUserSid() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return L"";
+    DWORD len = 0;
+    GetTokenInformation(tok, TokenUser, nullptr, 0, &len);
+    std::wstring sid;
+    if (len > 0) {
+        std::vector<BYTE> buf(len);
+        if (GetTokenInformation(tok, TokenUser, buf.data(), len, &len)) {
+            LPWSTR str = nullptr;
+            if (ConvertSidToStringSidW(((TOKEN_USER*)buf.data())->User.Sid, &str)) {
+                sid = str;
+                LocalFree(str);
+            }
+        }
+    }
+    CloseHandle(tok);
+    return sid;
+}
+
 // 任务定义：登录触发 + 最高权限 + 不限时 + 忽略重复实例
 std::wstring TaskXml() {
     std::wstring xml =
@@ -108,7 +157,9 @@ std::wstring TaskXml() {
         L"    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>\n"
         L"  </Triggers>\n"
         L"  <Principals>\n"
-        L"    <Principal id=\"Author\">"
+        L"    <Principal id=\"Author\"><UserId>";
+    xml += CurrentUserSid();
+    xml += L"</UserId>"
         L"<LogonType>InteractiveToken</LogonType><RunLevel>Highest</RunLevel>"
         L"</Principal>\n"
         L"  </Principals>\n"
@@ -129,15 +180,68 @@ std::wstring TaskXml() {
     return xml;
 }
 
-// 注册任务（调用方保证已提权）
+// 失败诊断日志：exit code + 环境信息（设置目录 autostart-error.txt）
+void WriteErrorLog(const wchar_t* stage) {
+    wchar_t dir[MAX_PATH] = {};
+    // 设置目录与 storage 的 StorageSettingsDir 一致：%APPDATA%\KeyboardStats
+    if (!GetEnvironmentVariableW(L"APPDATA", dir, MAX_PATH)) return;
+    const std::wstring path = std::wstring(dir) + L"\\KeyboardStats\\autostart-error.txt";
+    CreateDirectoryW((std::wstring(dir) + L"\\KeyboardStats").c_str(), nullptr);
+    FILE* f = nullptr;
+    // 追加模式：保留多次尝试的完整线索（XML 失败原因 + 兜底结果）
+    if (_wfopen_s(&f, path.c_str(), L"ab") != 0 || !f) return;
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    fprintf(f,
+            "[%04u-%02u-%02u %02u:%02u:%02u] stage=%ls\n"
+            "schtasks exit code = 0x%08lX\n"
+            "elevated = %d\n"
+            "task file exists = %d\n"
+            "exe = %ls\n"
+            "cmd = schtasks /Create /F /TN \"%ls\" /XML <temp>\n",
+            t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, stage,
+            (unsigned long)g_lastRunCode,
+            app::RunningElevated() ? 1 : 0,
+            GetFileAttributesW(kTaskFile) != INVALID_FILE_ATTRIBUTES ? 1 : 0,
+            ExePath().c_str(), kTaskName);
+    if (!g_lastRunOutput.empty()) {
+        fprintf(f, "--- schtasks output ---\n%.*s\n-----------------------\n",
+                (int)g_lastRunOutput.size(), g_lastRunOutput.c_str());
+    }
+    fclose(f);
+}
+
+// 注册任务（调用方保证已提权）。两个方案依次尝试：
+//  ① 命令行 /TR：已实测成功（路径无空格时 /TR 值整体一个引号、内部无需嵌套引号，
+//     早年"内嵌引号转义"坑不存在）；schtasks /RL HIGHEST 写出 HighestAvailable
+//  ② XML 注册：兜底（路径含空格时用），Command/Arguments 无转义问题但部分系统
+//     上以 exit 1 拒绝（原因不可见），仅在 ① 失败后尝试
 bool CreateTask() {
-    const std::wstring xmlPath = TempPath(L"keyboardstats-task.xml");
-    if (!WriteUtf16File(xmlPath, TaskXml())) return false;
-    const bool ok = RunHidden(std::wstring(L"schtasks /Create /F /TN \"")
-                              + kTaskName + L"\" /XML \"" + xmlPath + L"\"");
-    DeleteFileW(xmlPath.c_str());
-    InvalidateCache();
-    return ok && ReadTaskLevel() == 1;
+    // 方案 ①：命令行（无空格路径）
+    const std::wstring exe = ExePath();
+    if (exe.find(L' ') == std::wstring::npos) {
+        const std::wstring cmd = std::wstring(L"schtasks /Create /F /TN \"") + kTaskName
+                                 + L"\" /TR \"" + exe + L" --record\" /SC ONLOGON /RL HIGHEST";
+        const bool ok = RunHidden(cmd);
+        InvalidateCache();
+        if (ok && ReadTaskLevel() == 1) return true;
+        WriteErrorLog(L"cmdline-create");
+    }
+    // 方案 ②：XML 兜底
+    {
+        const std::wstring xmlPath = TempPath(L"keyboardstats-task.xml");
+        if (WriteUtf16File(xmlPath, TaskXml())) {
+            const bool ok = RunHidden(std::wstring(L"schtasks /Create /F /TN \"")
+                                      + kTaskName + L"\" /XML \"" + xmlPath + L"\"");
+            DeleteFileW(xmlPath.c_str());
+            InvalidateCache();
+            if (ok && ReadTaskLevel() == 1) return true;
+            WriteErrorLog(L"xml-create");
+        } else {
+            WriteErrorLog(L"write-xml");
+        }
+    }
+    return false;
 }
 
 } // namespace

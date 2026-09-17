@@ -164,7 +164,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
                             }
                             s_recMsg = "已取消管理员授权，自启动未开启";
                         } else {
-                            s_recMsg = "设置失败（创建计划任务被拒绝，请检查安全软件）";
+                            s_recMsg = "设置失败：诊断信息已写入设置目录 autostart-error.txt";
                         }
                     }
                     s_recMsgAt = GetTickCount64() / 1000.0;

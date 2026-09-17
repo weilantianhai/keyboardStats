@@ -10,3 +10,7 @@ build/
 .verify/
 KeyboardStats-v*.zip
 .git-new/
+.icons/
+.icons2/
+export-test.csv
+not-data.jsonl

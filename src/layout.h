@@ -42,7 +42,7 @@ inline constexpr KeyDef kKeys[] = {
     // ── 底行 ──
     {0xA2, 0,5,1.25f,1, L"Ctrl"},   {0x5B, 1.25f,5,1.25f,1, L"Win"},  {0xA4, 2.5f,5,1.25f,1, L"Alt"},
     {0x20, 3.75f,5,6.25f,1, L"Space"},
-    {0xA5, 10,5,1.25f,1, L"Alt"},   {0x5C, 11.25f,5,1.25f,1, L"Win"}, {0x5D, 12.5f,5,1.25f,1, L"Menu"},
+    {0xA5, 10,5,1.25f,1, L"Alt"},   {0x5C, 11.25f,5,1.25f,1, L"Fn"},  {0x5D, 12.5f,5,1.25f,1, L"Menu"},
     {0xA3, 13.75f,5,1.25f,1, L"Ctrl"},
     // ── 导航区 ──
     {0x2C, 15.5f,0,1,1, L"PrtSc"}, {0x91, 16.5f,0,1,1, L"ScrLk"}, {0x13, 17.5f,0,1,1, L"Pause"},
@@ -136,7 +136,8 @@ inline const wchar_t* StatName(uint8_t vk) {
         case 0xA0: case 0xA1: return L"Shift";
         case 0xA2: case 0xA3: return L"Ctrl";
         case 0xA4: case 0xA5: return L"Alt";
-        case 0x5B: case 0x5C: return L"Win";
+        case 0x5B: return L"Win";
+        case 0x5C: return L"Fn";   // 右侧 Win 位置多为 Fn（本机键盘即如此）
         case kMouseLeft:   return L"鼠标左键";
         case kMouseRight:  return L"鼠标右键";
         case kMouseMiddle: return L"鼠标中键";
