@@ -127,7 +127,7 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         })
         .build();
 
-    // ── 行 2：开机自启动（只拉起记录程序 + 托盘图标，不带图形界面）──
+    // ── 行 2：开机自启动（计划任务·最高权限，只拉起记录程序 + 托盘，不带界面）──
     const float rowAuto = y + Px(124.0f);
     ui.text("set.autostart.label")
         .x(x + Px(24.0f)).y(rowAuto).size(w - Px(230.0f), Px(30.0f))
@@ -145,9 +145,28 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
                 .theme(tk)
                 .transition(Motion())
                 .onChange([](bool v) {
-                    const bool ok = AutostartSet(v);
-                    s_recMsg = ok ? (v ? "已开启开机自启动（只启动记录程序）" : "已关闭开机自启动")
-                                  : "设置失败（注册表写入被拒绝，请检查权限）";
+                    if (!v) {
+                        AutostartDisable();
+                        s_recMsg = "已关闭开机自启动";
+                    } else {
+                        const AutostartResult r = AutostartEnable();
+                        if (r == AutostartResult::Ok) {
+                            s_recMsg = "已开启开机自启动（最高权限，游戏内可记录）";
+                        } else if (r == AutostartResult::NeedElevation) {
+                            // 创建最高权限任务需要提权环境：静默提权重启后由新实例完成
+                            s_recMsg = "需要管理员权限创建自启动任务，正在提权重启…";
+                            s_recMsgAt = GetTickCount64() / 1000.0;
+                            app::requestUpdate();
+                            if (RelaunchAsAdmin(L"--autostart-elevate")) {
+                                Sleep(600);
+                                ExitAppNow();
+                                return;
+                            }
+                            s_recMsg = "已取消管理员授权，自启动未开启";
+                        } else {
+                            s_recMsg = "设置失败（创建计划任务被拒绝，请检查安全软件）";
+                        }
+                    }
                     s_recMsgAt = GetTickCount64() / 1000.0;
                     app::requestUpdate();
                 })

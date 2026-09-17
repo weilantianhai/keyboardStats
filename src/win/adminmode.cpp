@@ -86,12 +86,13 @@ bool SetAdminModeFlagged(bool enable) {
     return ok;
 }
 
-bool RelaunchAsAdmin() {
+bool RelaunchAsAdmin(const wchar_t* args) {
     const std::wstring exe = ExePath();
     SHELLEXECUTEINFOW sei = {};
     sei.cbSize = sizeof sei;
     sei.lpVerb = L"runas";          // 触发 UAC；用户取消时返回 FALSE
     sei.lpFile = exe.c_str();
+    sei.lpParameters = args;        // 提权实例的附加参数（如 --autostart-elevate）
     sei.nShow = SW_SHOWNORMAL;
     if (!ShellExecuteExW(&sei)) return false;
     return true;

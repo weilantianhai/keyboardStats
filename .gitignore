@@ -9,3 +9,4 @@ build/
 .verify/
 .verify/
 KeyboardStats-v*.zip
+.git-new/

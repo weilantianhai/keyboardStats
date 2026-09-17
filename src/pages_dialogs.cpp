@@ -142,11 +142,17 @@ void DrawOnboardDialog(core::dsl::Ui& ui, const eui::Screen& screen) {
 
     MiniButton(ui, "ob.enable", dx + Px(26.0f), dy + dh - Px(64.0f),
                Px(196.0f), Px(44.0f), "开启自启动", true, [] {
-                   const bool ok = AutostartSet(true);
+                   const AutostartResult r = AutostartEnable();
                    PrefSetValue(L"ui-general.txt", "onboarded", "1");
                    g_onboardOpen = false;
                    app::requestUpdate();
-                   (void)ok;   // 失败时设置页的开关状态仍准确（Enabled 查注册表）
+                   if (r == AutostartResult::NeedElevation) {
+                       // 创建最高权限任务需要提权环境：静默提权重启后由新实例完成
+                       if (RelaunchAsAdmin(L"--autostart-elevate")) {
+                           Sleep(600);
+                           ExitAppNow();
+                       }
+                   }
                });
     MiniButton(ui, "ob.skip", dx + dw - Px(150.0f), dy + dh - Px(64.0f),
                Px(124.0f), Px(44.0f), "暂不", false, [] {

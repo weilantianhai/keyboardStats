@@ -30,7 +30,7 @@ bool SetAdminModeFlagged(bool enable);
 
 // 以管理员权限重启自己（弹 UAC）：新实例接管后由调用方退出本进程。
 // 返回 false = 用户取消了 UAC 或启动失败（本进程继续运行）。
-bool RelaunchAsAdmin();
+bool RelaunchAsAdmin(const wchar_t* args = nullptr);
 
 // 终结同 exe 的其它普通权限进程（提权实例接管前的清理）。返回终结数量。
 int KillOtherInstances();

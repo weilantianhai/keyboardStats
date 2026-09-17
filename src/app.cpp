@@ -422,6 +422,8 @@ const DslAppConfig& dslAppConfig() {
         });
 
         StorageInit();
+        // 提权实例启动时修复存量自启动任务（历史遗留的普通权限任务会开机失败）
+        AutostartRepairIfNeeded();
         LoadThemePref();   // 先于 config 求值，clearColor 才能拿到正确的主题底色
         LoadFontPref();    // 字体缩放偏好（自动/自定义）
 
@@ -436,12 +438,26 @@ const DslAppConfig& dslAppConfig() {
         if (wcsstr(GetCommandLineW(), L"--hladmin")) {
             DebugHighlightAdmin();
         }
-        // 调试用：--autostarton 注册自启动计划任务并把结果写到设置目录
-        if (wcsstr(GetCommandLineW(), L"--autostarton")) {
-            const bool r = AutostartSet(true);
+        // 自启动的提权收尾：管理员开关/自启动开关触发的提权重启，新实例在此完成
+        // 最高权限任务的创建，并把结果写到设置目录（供用户/旧实例确认）
+        if (wcsstr(GetCommandLineW(), L"--autostart-elevate")) {
+            const AutostartResult r = AutostartEnable();
             const std::wstring out = app::PrefDirPath() + L"\\autostart-result.txt";
             if (FILE* f = _wfopen(out.c_str(), L"wb")) {
-                fprintf(f, "AutostartSet(true) = %s\n", r ? "true" : "false");
+                fprintf(f, "AutostartEnable = %s\n",
+                        r == AutostartResult::Ok ? "Ok"
+                        : (r == AutostartResult::NeedElevation ? "NeedElevation" : "Failed"));
+                fclose(f);
+            }
+        }
+        // 调试用：--autostarton 等价于开关开启（含提权需求判断），结果写文件
+        if (wcsstr(GetCommandLineW(), L"--autostarton")) {
+            const AutostartResult r = AutostartEnable();
+            const std::wstring out = app::PrefDirPath() + L"\\autostart-result.txt";
+            if (FILE* f = _wfopen(out.c_str(), L"wb")) {
+                fprintf(f, "AutostartEnable = %s\n",
+                        r == AutostartResult::Ok ? "Ok"
+                        : (r == AutostartResult::NeedElevation ? "NeedElevation" : "Failed"));
                 fclose(f);
             }
         }

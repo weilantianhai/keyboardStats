@@ -1,27 +1,70 @@
-// 开机自启动：计划任务（登录触发）。
-// 为什么不用注册表 Run 键：Run 键项带提权兼容标记（RUNASADMIN）时，登录阶段的
-// 提权请求会被 Windows 静默丢弃（Consent 服务未就绪），表现为"在自启动列表里
-// 却开机不启动"——本机已实测确认。计划任务的最高权限由任务计划程序服务授予，
-// 不依赖登录时的 Consent 流程。
-// 为什么用 XML 注册而非 /TR 参数：schtasks 的 /TR 对内嵌引号有经典转义坑
-// （路径带引号+参数时部分系统直接报参数错误）。XML 的 Command/Arguments 是
-// 元素文本，无转义问题。写临时 XML（UTF-16）→ schtasks /Create /XML → 核验。
-// RunLevel：管理员模式开启 = Highest（游戏内也可记录，创建需提权环境——
-// 管理员模式下 GUI 本身已提权，天然满足）；未提权时自动降级 LeastPrivilege。
-// 渲染路径红线：AutostartEnabled 只做文件存在性检查，绝不 spawn 子进程。
+// 开机自启动实现：计划任务（登录触发 + 最高权限）。
+// 设计说明见 autostart.h 顶部的五条要点。
 #include "autostart.h"
 #include "adminmode.h"
+
 #include <windows.h>
-#include <shlobj.h>
 
 namespace {
 
+const wchar_t* kTaskName = L"KeyboardStats Recorder";
+const wchar_t* kTaskFile = L"C:\\Windows\\System32\\Tasks\\KeyboardStats Recorder";
 const wchar_t* kRunKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const wchar_t* kRunVal = L"KeyboardStats";
-const wchar_t* kTaskName = L"KeyboardStats Recorder";
-const wchar_t* kTaskFile = L"C://Windows//System32//Tasks//KeyboardStats Recorder";
 
-// 隐藏窗口执行命令并等待完成；返回 exit code == 0
+// 早期版本用注册表 Run 键实现自启动（登录阶段提权请求会被静默丢弃，已废弃）：
+// 开启任务时顺手清理残留值，避免与计划任务形成两个启动点
+void RemoveLegacyRunKey() {
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS) return;
+    RegDeleteValueW(k, kRunVal);
+    RegCloseKey(k);
+}
+
+// RunLevel 校验结果缓存（渲染路径每帧调用，读文件要节流）
+struct TaskStateCache {
+    DWORD at = 0;           // GetTickCount 时间戳
+    int level = -1;         // -1 未检测 / 0 不存在 / 1 Highest / 2 其它级别
+};
+TaskStateCache& Cache() {
+    static TaskStateCache c;
+    return c;
+}
+
+constexpr DWORD kCacheMs = 3000;
+
+// ── 任务定义文件解析 ──
+// 任务 XML 是 UTF-16LE；读成宽字符后精确匹配完整标签。
+// 注意不要用窄字符字面量做 "H\0i\0g..." 匹配——字符串字面量会在第一个 \0 处
+// 截断（实际只查找 "H"，用户名里的 H 会造成误判），必须用 wstring。
+int ReadTaskLevel() {
+    HANDLE h = CreateFileW(kTaskFile, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    wchar_t buf[4096] = {};
+    DWORD got = 0;
+    ReadFile(h, buf, sizeof(buf) - 2, &got, nullptr);
+    CloseHandle(h);
+    if (got < 4) return 0;
+    const std::wstring text(buf, got / sizeof(wchar_t));
+    return text.find(L"<RunLevel>Highest</RunLevel>") != std::wstring::npos ? 1 : 2;
+}
+
+int TaskLevelCached() {
+    auto& c = Cache();
+    const DWORD now = GetTickCount();
+    if (c.level < 0 || now - c.at > kCacheMs) {
+        c.level = ReadTaskLevel();
+        c.at = now;
+    }
+    return c.level;
+}
+
+void InvalidateCache() {
+    Cache().level = -1;
+}
+
+// 隐藏窗口执行命令并等待完成（仅用于开关切换/修复等一次性路径，不在渲染路径）
 bool RunHidden(const std::wstring& cmd) {
     STARTUPINFOW si = {};
     si.cb = sizeof si;
@@ -56,7 +99,8 @@ bool WriteUtf16File(const std::wstring& path, const std::wstring& text) {
     return true;
 }
 
-std::wstring TaskXml(bool highest) {
+// 任务定义：登录触发 + 最高权限 + 不限时 + 忽略重复实例
+std::wstring TaskXml() {
     std::wstring xml =
         L"<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n"
         L"<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n"
@@ -64,9 +108,9 @@ std::wstring TaskXml(bool highest) {
         L"    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>\n"
         L"  </Triggers>\n"
         L"  <Principals>\n"
-        L"    <Principal id=\"Author\"><LogonType>InteractiveToken</LogonType><RunLevel>";
-    xml += highest ? L"Highest" : L"LeastPrivilege";
-    xml += L"</RunLevel></Principal>\n"
+        L"    <Principal id=\"Author\">"
+        L"<LogonType>InteractiveToken</LogonType><RunLevel>Highest</RunLevel>"
+        L"</Principal>\n"
         L"  </Principals>\n"
         L"  <Settings>\n"
         L"    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n"
@@ -85,12 +129,15 @@ std::wstring TaskXml(bool highest) {
     return xml;
 }
 
-// 旧版注册表方式的清理（迁移）
-void RemoveLegacyRegistry() {
-    HKEY k;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS) return;
-    RegDeleteValueW(k, kRunVal);
-    RegCloseKey(k);
+// 注册任务（调用方保证已提权）
+bool CreateTask() {
+    const std::wstring xmlPath = TempPath(L"keyboardstats-task.xml");
+    if (!WriteUtf16File(xmlPath, TaskXml())) return false;
+    const bool ok = RunHidden(std::wstring(L"schtasks /Create /F /TN \"")
+                              + kTaskName + L"\" /XML \"" + xmlPath + L"\"");
+    DeleteFileW(xmlPath.c_str());
+    InvalidateCache();
+    return ok && ReadTaskLevel() == 1;
 }
 
 } // namespace
@@ -102,38 +149,31 @@ std::wstring ExePath() {
 }
 
 bool AutostartEnabled() {
-    // 渲染路径安全：纯文件存在性检查，无子进程
-    if (GetFileAttributesW(kTaskFile) != INVALID_FILE_ATTRIBUTES) return true;
-    // 兼容旧版注册表方式
-    HKEY k;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) return false;
-    DWORD type = 0, size = 0;
-    LONG r = RegQueryValueExW(k, kRunVal, nullptr, &type, nullptr, &size);
-    RegCloseKey(k);
-    return r == ERROR_SUCCESS && type == REG_SZ;
+    return TaskLevelCached() == 1;   // 必须存在且是 Highest，否则视为未开启
 }
 
-bool AutostartSet(bool enable) {
-    if (!enable) {
-        const bool ok = RunHidden(L"schtasks /Delete /F /TN \"KeyboardStats Recorder\"");
-        RemoveLegacyRegistry();
-        return ok || GetFileAttributesW(kTaskFile) == INVALID_FILE_ATTRIBUTES;
+AutostartResult AutostartEnable() {
+    // 已是最高权限任务：直接成功（幂等）
+    if (ReadTaskLevel() == 1) {
+        InvalidateCache();
+        return AutostartResult::Ok;
     }
-    // ── 注册计划任务 ──
-    const bool highest = app::AdminModeFlagged();
-    const std::wstring xmlPath = TempPath(L"keyboardstats-task.xml");
-    bool ok = false;
-    // 先按目标权限写 XML 注册；未提权时 Highest 注册会被拒绝，自动降级重试
-    for (int attempt = 0; attempt < 2 && !ok; ++attempt) {
-        const bool lvl = attempt == 0 ? highest : false;
-        if (!WriteUtf16File(xmlPath, TaskXml(lvl))) break;
-        ok = RunHidden(std::wstring(L"schtasks /Create /F /TN \"KeyboardStats Recorder\" /XML \"")
-                       + xmlPath + L"\"");
-    }
-    DeleteFileW(xmlPath.c_str());
-    if (!ok) return false;
-    // 双重启动防护：迁移时清掉旧注册表 Run 键
-    RemoveLegacyRegistry();
-    // 任务文件核验
-    return GetFileAttributesW(kTaskFile) != INVALID_FILE_ATTRIBUTES;
+    if (!app::RunningElevated()) return AutostartResult::NeedElevation;
+    const bool ok = CreateTask();
+    if (ok) RemoveLegacyRunKey();
+    return ok ? AutostartResult::Ok : AutostartResult::Failed;
+}
+
+bool AutostartDisable() {
+    RunHidden(std::wstring(L"schtasks /Delete /F /TN \"") + kTaskName + L"\"");
+    InvalidateCache();
+    return ReadTaskLevel() == 0;
+}
+
+void AutostartRepairIfNeeded() {
+    // 存量任务权限级别不对（或不存在）时重建为 Highest；未提权则什么也不做
+    if (!app::RunningElevated()) return;
+    if (ReadTaskLevel() == 1) return;
+    // 仅当任务存在（用户开过自启动）时才自动修复，不擅自替用户开启
+    if (ReadTaskLevel() == 2) CreateTask();
 }

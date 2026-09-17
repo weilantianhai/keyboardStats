@@ -1,4 +1,4 @@
-﻿# Regression tests: data layer (test_query) + autostart (test_autostart) + record management (test_records)
+# Regression tests: data layer (test_query) + autostart (test_autostart) + record management (test_records)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot   # project root (this script lives in tests/)
 $gxx = "D:\Program Files\mingw64\bin\g++.exe"
@@ -12,7 +12,7 @@ Write-Host "--- test_query ---"
 & "$out\test_query.exe"
 
 # 2) autostart regression (new win/autostart.cpp)
-& $gxx -std=c++17 -O2 -DUNICODE -D_UNICODE "$root\tests\test_autostart.cpp" "$root\src\win\autostart.cpp" -o "$out\test_autostart.exe"
+& $gxx -std=c++17 -O2 -DUNICODE -D_UNICODE "$root\tests\test_autostart.cpp" "$root\src\win\autostart.cpp" "$root\src\win\adminmode.cpp" -o "$out\test_autostart.exe"
 if ($LASTEXITCODE -ne 0) { Write-Error "test_autostart compile failed"; exit 1 }
 Write-Host "--- test_autostart ---"
 & "$out\test_autostart.exe"
