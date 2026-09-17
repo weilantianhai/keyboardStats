@@ -40,6 +40,9 @@
   避免"滚轮格数动辄上万"把几十次的鼠标点击压成一片接近零的冷色（同一份数据下分开模式
   让点击的对比度提高约一个数量级）。
 - 键盘翻页：`←` `→` `PgUp` `PgDn`
+- 键位显示：右侧 Win 键位按键盘丝印显示为 **Fn**（本机键盘该键为 Fn）。注意 Fn 通常是
+  **硬件级按键**——不向系统发送任何键码，任何软件都无法统计（用 `tools/fn-diag.bat`
+  可自行验证：按下 A 有事件、按 Fn 零事件）
 - **主页看板**（键鼠区上方）：活跃分数（键盘+鼠标+滚轮×0.1，今日）、今日键盘、
   今日鼠标、滚轮格数（今日）、使用天数、活跃天数
 - **首次启动引导**：第一次打开会询问是否开启开机自启动（开启后开机自动后台记录，
@@ -118,7 +121,7 @@
 ### 打包发布
 
 ```powershell
-.\pack.ps1 -Version v1.0.1          # 构建 + 打包（-SkipBuild 可只打包）
+.\pack.ps1 -Version v1.0.2          # 构建 + 打包（-SkipBuild 可只打包）
 ```
 
 产出根目录下的 `KeyboardStats-<版本>-win64.zip`（exe + 完整 `assets\` + README/GUIDE/NOTICES）。
@@ -233,14 +236,16 @@ src/recorder.cpp       无界面记录进程（--record）：钩子+落盘+托�
 src/state.h            共享运行状态与 FetchStats 声明
 src/pref.h             偏好文件读写（header-only，不依赖框架，数据层也能用）
 src/ui_util.h          通用小工具（颜色/编码/格式化，header-only）
-src/win/autostart.cpp  开机自启动：注册表 Run 键写入 + 读回核验（见上文）
+src/win/autostart.cpp  开机自启动：计划任务注册（最高权限）+ 权限级别校验 + 存量修复
 src/win/adminmode.cpp  管理员模式：RUNASADMIN 兼容性标记 + 提权重启 + 接管旧实例
 src/win/filedialog.h   打开/保存/文件夹选择对话框（header-only）
 src/hook.cpp           WH_KEYBOARD_LL / WH_MOUSE_LL 低级钩子（只观察不拦截）
 src/storage.cpp        数据位置解析、事件缓冲落盘、按日聚合、时段查询、记录管理
 src/layout.h           104 键 ANSI 布局表 + 键名映射 + 鼠标伪键码 + 键位分组判定
 src/timeutil.cpp       公历日期算法（Howard Hinnant）、时间格式化
-assets/icon.png        托盘/窗口图标
+assets/icon.png        运行时图标（窗口 + 托盘，512×512）
+src/resources/app.ico  exe 文件图标（多尺寸，app.rc 嵌入）
+src/resources/app.rc   资源脚本：图标 + 应用程序清单（asInvoker）
 build.ps1              CMake 一键构建
 tests/                 数据层、注册表、记录管理、默认目录解析的独立测试程序
 plan/                  当初 UI 重写为 EUI-NEO 的方案存档
