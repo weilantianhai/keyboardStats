@@ -12,11 +12,14 @@
 namespace app {
 
 struct TopEntry {
-    uint8_t vk = 0;         // 虚拟键码（热力归一化分组用）
+    KeyCode vk = 0;                        // 键码（热力归一化分组用）
     std::string name;
     long count = 0;
     float frac = 0.0f;      // 相对全局峰值的比例（直方图页分布图用）
-    bool isMouse = false;   // 鼠标/滚轮伪键（用于分区显示与筛选）
+    KeyGroup group = KeyGroup::Keyboard;   // 所属分组（键盘/鼠标点击/滚轮/手柄）
+    // 摇杆/扳机这两类是**行程**不是次数：count 已经是按"行程显示单位"换算过的数，
+    // 后缀要跟着单位走（次 / mm），不能一律写"次"。
+    bool analog = false;
 };
 
 extern int  g_page;           // 0=热力图 1=直方图

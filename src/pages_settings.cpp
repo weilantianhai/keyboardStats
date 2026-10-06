@@ -10,6 +10,7 @@
 #include "timeutil.h"
 #include "storage.h"
 #include "pref.h"
+#include "padpref.h"
 #include "win/filedialog.h"
 #include "win/autostart.h"
 #include "win/adminmode.h"
@@ -45,9 +46,15 @@ int s_pendingDirFiles = 0;    // 待搬运的数据文件个数
 // 两个面板的高度按"内容需要"固定，不随窗口高度压缩：
 // 之前按可用高度取比例，窗口一小面板就比内容矮，说明文字会和滑块叠在一起，
 // 底部的按钮也会被窗口裁掉。现在改为固定内容高度 + 外层滚动视图。
-constexpr float kFontPanelH = 440.0f;   // 含管理员开关行、说明文档行与框架署名
+constexpr float kFontPanelH = 556.0f;   // 含管理员/自启动/字体滑块/自动手柄两行/说明文档与框架署名
 
 constexpr float kRecPanelH  = 276.0f;
+
+// 手柄有关的两行（采样率 / 显示单位）：放在字体面板里，紧接"自动"说明行下方。
+// 两行都按"左标签 + 右控件"的同一套坐标排版，改其中一个不必动另一个。
+constexpr float kPadRateRowY = 322.0f;   // 相对面板顶
+constexpr float kPadUnitRowY = kPadRateRowY + 62.0f;
+constexpr float kPadCtlW     = 300.0f;    // 右侧控件宽度（分段控件）
 
 // 字体设置面板：画在"滚动内容坐标系"里（原点 = 内容左上角，宽 = w）
 static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
@@ -253,6 +260,86 @@ static void DrawFontPanel(core::dsl::Ui& ui, float w, float y,
         .color(g_theme.textMut)
         .build();
 
+    // ── 行 5 / 6：手柄采样率、行程显示单位 ──
+    // 两行排版完全一致（左边两行文字 + 右侧分段控件），提成局部 lambda：
+    // 两行高度、控件宽度、基线偏移都是同一套数字，改一处不会让另一行错位。
+    //   左边：标签（正文色）+ 说明（弱化色，随当前选项变化，让用户不用点开就知道现值）
+    //   右边：分段控件，宽度 kPadCtlW（300）——三档每档 100、两档每档 150，都够放文字
+    auto padPrefRow = [&](const char* id, float relY, const char* label, const std::string& desc,
+                          const std::vector<std::string>& items, int sel,
+                          std::function<void(int)> onChange) {
+        const float rowY = y + Px(relY);
+        const float textW = w - Px(48.0f) - Px(kPadCtlW) - Px(24.0f);
+        ui.text(std::string(id) + ".label")
+            .x(x + Px(24.0f)).y(rowY + Px(2.0f)).size(textW, Px(28.0f))
+            .text(label)
+            .fontSize(m.typography.body)
+            .lineHeight(Px(28.0f))
+            .color(g_theme.text)
+            .build();
+        ui.text(std::string(id) + ".desc")
+            .x(x + Px(24.0f)).y(rowY + Px(30.0f)).size(textW, Px(24.0f))
+            .text(desc)
+            .fontSize(m.typography.caption)
+            .lineHeight(Px(22.0f))
+            .color(g_theme.textMut)
+            .build();
+
+        // 控件与左侧"标签+说明"整体垂直居中：两行文字块高约 52，控件 40，故上偏 6
+        ui.stack(std::string(id) + ".row")
+            .x(x + w - Px(24.0f) - Px(kPadCtlW)).y(rowY + Px(6.0f))
+            .size(Px(kPadCtlW), Px(40.0f))
+            .content([&] {
+                components::segmented(ui, std::string("seg.") + id)
+                    .size(Px(kPadCtlW), Px(40.0f))
+                    .items(items)
+                    .selected(sel)
+                    .theme(tk)
+                    .transition(Motion())
+                    .onChange(onChange)
+                    .build();
+            })
+            .build();
+    };
+
+    {
+        // 采样率只影响模拟量行程累计的精度：XInput 自身约 125Hz，采到 8ms 已是上限，
+        // 再快只是白烧 CPU。按键是边沿触发，三档结果一致——说明里点出这点，
+        // 免得用户以为调低会漏记按键。
+        const PadRate cur = PadRateGet();
+        padPrefRow("set.rate", kPadRateRowY, "手柄采样率",
+                   std::string("摇杆/扳机行程的记录精度 · 当前 ") + Utf8(PadRateName(cur)) +
+                       "（" + Utf8(PadRateDesc(cur)) + "）· 按键不受影响",
+                   {"低 · 30Hz", "中 · 62Hz", "高 · 125Hz"}, (int)cur,
+                   [](int v) { PadRateSet(PadRateAt(v)); app::requestUpdate(); });
+    }
+
+    {
+        const PadUnit cur = PadUnitGet();
+        padPrefRow("set.unit", kPadUnitRowY, "行程显示单位",
+                   std::string("摇杆/扳机读数的呈现方式 · ") + Utf8(PadUnitDesc(cur)),
+                   {"等效次数", "毫米"}, (int)cur,
+                   [](int v) {
+                       PadUnitSet(PadUnitAt(v));
+                       // 必须重算：列表里的摇杆/扳机数值是在 FetchStats 里按单位
+                       // 折算后存进 TopEntry 的，只改偏好不重算的话界面纹丝不动。
+                       FetchStats();
+                       app::requestUpdate();
+                   });
+    }
+
+    // 折算基准与活跃分数口径：这两个数字都会出现在看板上，但公式本身在界面上没处查，
+    // 放一句在这里，用户看到"毫米"或"活跃分数"时能对上是怎么算的。
+    ui.text("set.pad.basis")
+        .x(x + Px(24.0f)).y(y + Px(kPadUnitRowY) + Px(58.0f)).size(w - Px(48.0f), Px(22.0f))
+        .text(std::string("折算基准：摇杆满推往返 ") + std::to_string((int)kPadStickRoundTripMm) +
+              "mm、扳机满按 " + std::to_string((int)kPadTriggerFullMm) + "mm、一次按键 " +
+              std::to_string((int)kPadKeyTravelMm) + "mm · " + Utf8(kScoreBasisText))
+        .fontSize(m.typography.caption)
+        .lineHeight(Px(20.0f))
+        .color(g_theme.textMut)
+        .build();
+
     // ── 行 4：说明文档（默认浏览器打开 GitHub 仓库的 README 页）──
     const float rowDoc = y + h - Px(52.0f);
     ui.text("set.doc.label")
@@ -341,9 +428,9 @@ static void DrawRecordPanel(core::dsl::Ui& ui, float w, float y,
     const float valueW = right - (wFirst + wSecond + miniGap * 2) - (bx + Px(24.0f) + Px(88.0f));
     const float folderY = by + Px(86.0f);
     const float fileY = by + Px(126.0f);
-    // 数据文件行有 3 个按钮（新建/选择/自动），宽度按同样比例分配
-    const float fNew = Px(58.0f), fPick = Px(58.0f), fAuto = Px(58.0f);
-    const float fileValueW = right - (fNew + fPick + fAuto + miniGap * 2) - (bx + Px(24.0f) + Px(88.0f));
+    // 数据文件行有 4 个按钮（新建/选择/合并/自动），宽度按同样比例分配
+    const float fNew = Px(58.0f), fPick = Px(58.0f), fMerge = Px(58.0f), fAuto = Px(58.0f);
+    const float fileValueW = right - (fNew + fPick + fMerge + fAuto + miniGap * 3) - (bx + Px(24.0f) + Px(88.0f));
 
     // 目标文件夹里没有数据文件时直接切换；有则记下来弹确认框
     auto requestFolderChange = [&](const std::wstring& dir) {
@@ -401,7 +488,7 @@ static void DrawRecordPanel(core::dsl::Ui& ui, float w, float y,
     pathRow("rec.file", fileY, "数据文件",
             elide(curFile.empty() ? std::string("自动（按月 events-YYYYMM.jsonl）") : Utf8(curFile),
                   (size_t)std::max(12.0f, fileValueW / Px(7.0f))), fileValueW);
-    MiniButton(ui, "rec.file.new", right - (fNew + fPick + fAuto + miniGap * 2), fileY,
+    MiniButton(ui, "rec.file.new", right - (fNew + fPick + fMerge + fAuto + miniGap * 3), fileY,
                fNew, miniH, "新建", false, [] {
         std::wstring name, err;
         if (StorageCreateDataFile(&name, &err)) {
@@ -414,7 +501,7 @@ static void DrawRecordPanel(core::dsl::Ui& ui, float w, float y,
         s_recMsgAt = GetTickCount64() / 1000.0;
         app::requestUpdate();
     });
-    MiniButton(ui, "rec.file.pick", right - (fPick + fAuto + miniGap), fileY,
+    MiniButton(ui, "rec.file.pick", right - (fPick + fMerge + fAuto + miniGap * 2), fileY,
                fPick, miniH, "选择", false, [] {
         std::wstring path;
         if (!PickOpenFile(L"选择数据文件（JSONL 事件文件）",
@@ -428,6 +515,21 @@ static void DrawRecordPanel(core::dsl::Ui& ui, float w, float y,
             s_recMsg = "已切换到 " + Utf8(DataFileName()) + "（" + WithCommas(n) + " 条事件）";
         } else {
             s_recMsg = "切换失败：" + Utf8(err);
+        }
+        s_recMsgAt = GetTickCount64() / 1000.0;
+        app::requestUpdate();
+    });
+    MiniButton(ui, "rec.file.merge", right - (fMerge + fAuto + miniGap), fileY,
+               fMerge, miniH, "合并", false, [] {
+        int files = 0; long events = 0; std::wstring err;
+        if (StorageMergeDataFiles(&files, &events, &err)) {
+            FetchStats();
+            s_recInfoAt = 0.0;
+            s_recMsg = "已合并 " + WithCommas(files) + " 个文件（" + WithCommas(events) +
+                       " 条事件）到当前文件";
+            if (!err.empty()) s_recMsg += "；" + Utf8(err);
+        } else {
+            s_recMsg = "合并失败：" + Utf8(err);
         }
         s_recMsgAt = GetTickCount64() / 1000.0;
         app::requestUpdate();
@@ -532,16 +634,38 @@ void DrawSettingsPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const auto tk = CurrentTheme();
     const auto& m = tk.metrics;
     const float x = Px(28.0f), y = ContentTop();
-    const float w = std::min(screen.width - Px(56.0f), Px(760.0f));
+    // 大屏分两列：设置项越加越多，单列 760 在宽屏上右边一大片空白。
+    // 阈值是**物理像素**（1500），不能用 Px()——screen.width 本身就是物理像素，
+    // 而 Px() 会再乘字体缩放：1.6x 字号下阈值被放大到 ~1984，比可用宽度还大，
+    // 大屏也永远不触发（实测就是这么翻车的）。
+    // 1500 物理像素：1920/1680 宽的屏都分两列；1366 笔记本回退单列竖排。
+    const float availW = screen.width - Px(56.0f);
+    const bool twoCol = availW >= 1500.0f;
+    const float w = twoCol ? availW : std::min(availW, Px(760.0f));
     const float viewH = std::max(Px(120.0f), screen.height - y - Px(24.0f));
     const float gapY = Px(kPanelGap);
 
-    const float contentH = Px(kFontPanelH) + gapY + Px(kRecPanelH);
+    // 两列：左=字体/权限/自启动，右=手柄与数据位置；高度取较高的一列
+    const float contentH = twoCol ? std::max(Px(kFontPanelH), Px(kRecPanelH))
+                                  : Px(kFontPanelH) + gapY + Px(kRecPanelH);
 
     const float off = ScrollArea(ui, "set.scroll", x, y, w, viewH, contentH, s_settingsScroll,
                                  [&](core::dsl::Ui& su, float cw) {
-                                     DrawFontPanel(su, cw, 0.0f, tk, screen.width);
-                                     DrawRecordPanel(su, cw, Px(kFontPanelH) + gapY, tk);
+                                     if (twoCol) {
+                                         const float colW = (cw - Px(kPanelGap)) * 0.5f;
+                                         DrawFontPanel(su, colW, 0.0f, tk, screen.width);
+                                         // 用 stack 做横向偏移，面板函数不用改签名
+                                         ui.stack("set.col.right")
+                                             .x(colW + Px(kPanelGap)).y(0.0f)
+                                             .size(colW, Px(kRecPanelH))
+                                             .content([&] {
+                                                 DrawRecordPanel(su, colW, 0.0f, tk);
+                                             })
+                                             .build();
+                                     } else {
+                                         DrawFontPanel(su, cw, 0.0f, tk, screen.width);
+                                         DrawRecordPanel(su, cw, Px(kFontPanelH) + gapY, tk);
+                                     }
                                  });
     ScrollThumb(ui, "set.scroll", x, y, w, viewH, contentH, off);
 

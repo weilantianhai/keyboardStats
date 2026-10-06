@@ -160,7 +160,13 @@ std::wstring TaskXml() {
         L"    <Principal id=\"Author\"><UserId>";
     xml += CurrentUserSid();
     xml += L"</UserId>"
-        L"<LogonType>InteractiveToken</LogonType><RunLevel>Highest</RunLevel>"
+        // ⚠ RunLevel 的合法枚举值只有 LeastPrivilege 与 **HighestAvailable**，没有
+        // "Highest"。写 Highest 会让 schtasks 直接拒绝整份 XML：
+        //   "错误: 指定的 XML 格式不正确。异常为值。(7,150):RunLevel:Highest"
+        // 于是"命令行创建 + XML 覆盖写回电池设置"这条路一直是失败的——
+        // 任务只带 schtasks 默认的"电池上禁止启动"，拔电开机自然不启动。
+        // （schtasks /RL HIGHEST 写出来的也正是 HighestAvailable，两边才对得上。）
+        L"<LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel>"
         L"</Principal>\n"
         L"  </Principals>\n"
         L"  <Settings>\n"
@@ -211,36 +217,73 @@ void WriteErrorLog(const wchar_t* stage) {
     fclose(f);
 }
 
+// 任务的电池设置是否正确（<DisallowStartIfOnBatteries>false</...> 必须在场）。
+// 任务不存在时返回 true——开不开是用户的事，这里只管"开着但设置不对"。
+// 背景：schtasks /Create 命令行没有电源参数，任务会被装上默认的
+// "电池上禁止启动/运行"——笔记本**拔掉电源后开机，登录触发器直接被跳过**，
+// 自启动失效（用户实测踩过：插电一切正常、拔电失效）。
+bool TaskBatteryOk() {
+    HANDLE h = CreateFileW(kTaskFile, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return true;   // 任务不存在：无事可做
+    wchar_t buf[4096] = {};
+    DWORD got = 0;
+    ReadFile(h, buf, sizeof(buf) - 2, &got, nullptr);
+    CloseHandle(h);
+    if (got < 4) return true;
+    const std::wstring text(buf, got / sizeof(wchar_t));
+    return text.find(L"<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>")
+           != std::wstring::npos;
+}
+
+// 用 TaskXml() 覆盖注册任务（/F 强制，已有任务也会被整体替换）。
+// XML 里电源设置是写对的（false/false/true + StartWhenAvailable），
+// 这是命令行路径做不到的——schtasks /Create 没有电源参数可传。
+bool ApplyTaskXml() {
+    const std::wstring xmlPath = TempPath(L"keyboardstats-task.xml");
+    if (!WriteUtf16File(xmlPath, TaskXml())) {
+        WriteErrorLog(L"write-xml");
+        return false;
+    }
+    const bool ok = RunHidden(std::wstring(L"schtasks /Create /F /TN \"")
+                              + kTaskName + L"\" /XML \"" + xmlPath + L"\"");
+    DeleteFileW(xmlPath.c_str());
+    InvalidateCache();
+    // 失败诊断限流：同一进程内只记一次。修复路径在每次提权启动时都会跑，
+    // 若因别的原因一直失败，逐次追加能把日志刷成几十 KB（这轮排查时就是这样）。
+    static bool logged = false;
+    if (!ok && !logged) {
+        logged = true;
+        WriteErrorLog(L"xml-apply");
+    }
+    return ok;
+}
+
 // 注册任务（调用方保证已提权）。两个方案依次尝试：
 //  ① 命令行 /TR：已实测成功（路径无空格时 /TR 值整体一个引号、内部无需嵌套引号，
 //     早年"内嵌引号转义"坑不存在）；schtasks /RL HIGHEST 写出 HighestAvailable
 //  ② XML 注册：兜底（路径含空格时用），Command/Arguments 无转义问题但部分系统
 //     上以 exit 1 拒绝（原因不可见），仅在 ① 失败后尝试
 bool CreateTask() {
-    // 方案 ①：命令行（无空格路径）
+    // 方案 ①：命令行（无空格路径）——兼容性最好，保证任务能建出来；
+    // 但它装上的是 schtasks 默认电源设置（电池上禁止启动/运行），见 TaskBatteryOk。
     const std::wstring exe = ExePath();
     if (exe.find(L' ') == std::wstring::npos) {
         const std::wstring cmd = std::wstring(L"schtasks /Create /F /TN \"") + kTaskName
                                  + L"\" /TR \"" + exe + L" --record\" /SC ONLOGON /RL HIGHEST";
         const bool ok = RunHidden(cmd);
         InvalidateCache();
-        if (ok && ReadTaskLevel() == 1) return true;
+        if (ok && ReadTaskLevel() == 1) {
+            // 命令行建不出电源设置，紧跟一次 XML 覆盖把它写对。
+            // 覆盖失败不回滚（任务在、只是设置保守），诊断日志留痕。
+            ApplyTaskXml();
+            return ReadTaskLevel() == 1;
+        }
         WriteErrorLog(L"cmdline-create");
     }
-    // 方案 ②：XML 兜底
-    {
-        const std::wstring xmlPath = TempPath(L"keyboardstats-task.xml");
-        if (WriteUtf16File(xmlPath, TaskXml())) {
-            const bool ok = RunHidden(std::wstring(L"schtasks /Create /F /TN \"")
-                                      + kTaskName + L"\" /XML \"" + xmlPath + L"\"");
-            DeleteFileW(xmlPath.c_str());
-            InvalidateCache();
-            if (ok && ReadTaskLevel() == 1) return true;
-            WriteErrorLog(L"xml-create");
-        } else {
-            WriteErrorLog(L"write-xml");
-        }
-    }
+    // 方案 ②：XML 兜底（路径含空格 / 命令行失败）
+    if (ApplyTaskXml() && ReadTaskLevel() == 1) return true;
+    WriteErrorLog(L"xml-create");
     return false;
 }
 
@@ -275,9 +318,11 @@ bool AutostartDisable() {
 }
 
 void AutostartRepairIfNeeded() {
-    // 存量任务权限级别不对（或不存在）时重建为 Highest；未提权则什么也不做
+    // 存量任务权限级别不对，或电池设置不对（schtasks 默认值）时重建；未提权则不做
     if (!app::RunningElevated()) return;
-    if (ReadTaskLevel() == 1) return;
-    // 仅当任务存在（用户开过自启动）时才自动修复，不擅自替用户开启
-    if (ReadTaskLevel() == 2) CreateTask();
+    if (ReadTaskLevel() == 0) return;   // 未开启：不擅自替用户开启
+    if (ReadTaskLevel() == 1 && TaskBatteryOk()) return;
+    // 走到这里 = 任务存在但需要修：CreateTask 的命令行 + XML 覆盖会一并把
+    // RunLevel 与电源设置写对（老版本只修 RunLevel，漏掉了电池设置）。
+    CreateTask();
 }

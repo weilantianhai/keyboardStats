@@ -15,6 +15,7 @@
 | [stb_image](https://github.com/nothings/stb) | 图像解码 | MIT / 公共领域 | nothings/stb |
 | [tray](https://github.com/zserge/tray) | 托盘图标 | MIT | zserge/tray |
 | [yyjson](https://github.com/ibireme/yyjson) | JSON 解析 | MIT | ibireme/yyjson |
+| [gamepad-viewer](https://github.com/e7d/gamepad-viewer) | Xbox One 手柄皮肤（手柄面板造型来源，矢量重绘） | MIT | e7d |
 
 ---
 
@@ -577,3 +578,36 @@ SOFTWARE.
 - **glad** — OpenGL/Vulkan 加载器生成器。MIT License，Copyright (c) David Herberth。上游：https://github.com/Dav1dde/glad
 - **nanosvg / nanosvgrast** — SVG 解析与光栅化。MIT License（与 Zlib 许可兼容），Copyright (c) 2013-14 Mikko Mononen。上游：https://github.com/memononen/nanosvg
 - **stb_image** — 图像解码。MIT License 或公共领域（双许可），Copyright (c) 2014-2024 Sean Barrett。上游：https://github.com/nothings/stb
+
+---
+
+## gamepad-viewer
+
+```
+MIT License
+
+Copyright (c) 2017-2020 Michaël "e7d" Ferrand
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```
+
+本项目手柄面板的机身轮廓与按键布局取自该项目的 Xbox One 皮肤
+（templates/xbox-one/base-white.svg 及 template.css 定位表），经坐标换算后
+以本项目自有渲染器重绘，未打包其任何原始资产文件。

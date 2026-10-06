@@ -22,11 +22,21 @@ add_executable(KeyboardStats
     src/win/autostart.cpp
     src/win/adminmode.cpp
     src/hook.cpp
+    src/gamepad.cpp          # Xbox 手柄采集（XInput 动态加载，无静态链接依赖）
     src/storage.cpp
     src/timeutil.cpp
-    src/resources/app.rc    # 应用清单：requireAdministrator（游戏等高完整性窗口下也可记录）
+    src/resources/app.rc    # 资源脚本：应用图标 + 应用程序清单（asInvoker，管理员模式由设置页开关控制）
 )
 eui_neo_configure_app(KeyboardStats)
+
+# 框架的 configure_app 会额外塞一份自带图标（EUI_NEO_APP_ICON_RESOURCE → 框架的 assets/icon.ico）。
+# 我们通过 src/resources/app.rc 提供正式应用图标，两份同类型同名的 ICON 会让 ld 报
+# ".rsrc merge failure: duplicate leaf: type: 3 (ICON)"，且最终保留哪一份不确定。
+# 这里把框架那份标成 HEADER_FILE_ONLY（不参与编译），保证 exe 图标就是我们的 app.ico。
+get_property(EUI_DEFAULT_ICON_RC GLOBAL PROPERTY EUI_NEO_APP_ICON_RESOURCE)
+if (EUI_DEFAULT_ICON_RC)
+    set_source_files_properties("${EUI_DEFAULT_ICON_RC}" PROPERTIES HEADER_FILE_ONLY TRUE)
+endif ()
 
 # 记录管理用到 Win32 文件对话框、ShellExecute 与文件夹选择（SHBrowseForFolder/CoTaskMemFree）；
 # 记录进程的托盘图标用 GDI+ 从 assets\icon.png 生成

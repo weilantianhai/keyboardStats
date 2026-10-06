@@ -9,6 +9,7 @@
 #include "components/components.h"
 #include "timeutil.h"
 #include "storage.h"
+#include "padpref.h"
 #include "pref.h"
 #include "win/filedialog.h"
 #include "win/autostart.h"
@@ -71,32 +72,20 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
                 return;
             }
 
-            // 筛选：键盘 / 鼠标 / 全部 / 分开（分开=左键盘右鼠标，只改排序不改盒子）
-            const float filterW = Px(360.0f), filterH = Px(34.0f);
+            // 筛选：键盘 / 鼠标 / 手柄 / 全部 / 分开（分开=按分组分段排序，只改顺序不改盒子）
+            const float filterW = Px(420.0f), filterH = Px(34.0f);
             ui.stack("keyhist.filter")
                 .x(w - titleX - filterW).y(m.typography.control - Px(2.0f)).size(filterW, filterH)
                 .content([&] {
                     components::segmented(ui, "seg.keyfilter")
                         .size(filterW, filterH)
-                        .items({"键盘", "鼠标", "全部", "分开"})
+                        .items({"键盘", "鼠标", "手柄", "全部", "分开"})
                         .selected(g_keyFilter)
                         .theme(tk)
                         .transition(Motion())
                         .onChange([](int v) { g_keyFilter = v; app::requestUpdate(); })
                         .build();
                 })
-                .build();
-
-            // 右上角注解：最多键
-            const TopEntry& maxE = g_keyHist.back();
-            ui.text("keyhist.max")
-                .x(titleX)
-                .y(m.typography.control + m.typography.title + Px(4.0f))
-                .size(std::max(0.0f, w - titleX * 2.0f), m.control.compact)
-                .text("最多：" + maxE.name + " " + WithCommas(maxE.count) + " 次")
-                .fontSize(m.typography.label)
-                .lineHeight(m.typography.label + m.typography.lineGap)
-                .color(g_theme.textMut)
                 .build();
 
             // 绘图区几何与 barChart 相同
@@ -115,18 +104,51 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
                     .build();
             }
 
-            // 依筛选构建显示序列（全部为升序；分开 = 键盘在前、鼠标在后，仍是同一条序列）
+            // 依筛选构建显示序列（全部为升序；分开 = 按键分组分段，组内仍是升序）
             std::vector<const TopEntry*> items;
+            const auto inFilter = [](KeyGroup g) {
+                switch (app::g_keyFilter) {
+                    case 0:  return g == KeyGroup::Keyboard;
+                    case 1:  return g == KeyGroup::MouseButton || g == KeyGroup::Wheel;
+                    case 2:  return g == KeyGroup::Gamepad;
+                    default: return true;                          // 全部 / 分开：不筛
+                }
+            };
             for (const TopEntry& e : g_keyHist)                    // g_keyHist 本身按次数升序
-                if (g_keyFilter == 0 && e.isMouse) continue;
-                else if (g_keyFilter == 1 && !e.isMouse) continue;
-                else if (g_keyFilter == 3 && e.isMouse) continue;  // 分开：先只放键盘
-                else items.push_back(&e);
-            if (g_keyFilter == 3) {
-                for (const TopEntry& e : g_keyHist)
-                    if (e.isMouse) items.push_back(&e);            // 再追加鼠标 → 排到最右
+                if (inFilter(e.group)) items.push_back(&e);
+            if (app::g_keyFilter == 4) {
+                // 分开：按分组聚成段（stable 保留段内的次数升序）
+                std::stable_sort(items.begin(), items.end(),
+                                 [](const TopEntry* a, const TopEntry* b) {
+                                     return (int)a->group < (int)b->group;
+                                 });
             }
             if (items.empty()) return;
+
+            // 柱高与颜色基准：
+            //   单独筛某组（键盘/鼠标/手柄）→ **组内最大值**。用户明确选了"键盘"，
+            //   就该看键盘内部的相对关系；沿用全局 frac 会让所有键被鼠标左键压成矮墩。
+            //   全部 / 分开 → 全局峰值（跨组可比，与计数列表热力条同一口径，行为不变）。
+            const bool perGroupBase = app::g_keyFilter <= 2;
+            long base = 0;
+            const TopEntry* maxE = items.front();
+            for (const TopEntry* e : items) {
+                base = std::max(base, e->count);
+                if (e->count > maxE->count) maxE = e;
+            }
+
+            // 右上角注解：当前筛选下的最多键（不是全局的——筛"键盘"时显示鼠标左键是误导）
+            ui.text("keyhist.max")
+                .x(titleX)
+                .y(m.typography.control + m.typography.title + Px(4.0f))
+                .size(std::max(0.0f, w - titleX * 2.0f), m.control.compact)
+                // 摇杆/扳机是行程，后缀跟"行程显示单位"开关走（次 / mm），键鼠固定"次"
+                .text("最多：" + maxE->name + " " + WithCommas(maxE->count) + " " +
+                      Utf8(PadUnitSuffixForCount(maxE->analog)))
+                .fontSize(m.typography.label)
+                .lineHeight(m.typography.label + m.typography.lineGap)
+                .color(g_theme.textMut)
+                .build();
 
             const int n = (int)items.size();
             const float slotW = plotW / (float)n;
@@ -134,7 +156,9 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
             const float barW = std::min(40.0f, std::max(2.0f, slotW * 0.70f));
             for (int i = 0; i < n; ++i) {
                 const TopEntry& e = *items[(size_t)i];
-                const float frac = std::clamp(e.frac, 0.0f, 1.0f);
+                const float frac = perGroupBase
+                    ? (base > 0 ? std::clamp((float)e.count / (float)base, 0.0f, 1.0f) : 0.0f)
+                    : std::clamp(e.frac, 0.0f, 1.0f);
                 const float barH = std::max(8.0f, frac * plotH);
                 const float bx = plotX + (float)i * slotW + (slotW - barW) * 0.5f;
                 const float by = bottomY - barH;
@@ -153,7 +177,8 @@ void DrawKeyHist(core::dsl::Ui& ui, float x, float y, float w, float h) {
                 components::tooltip(ui, barId + ".tooltip")
                     .theme(tk)
                     .source(barId)
-                    .value(e.name + " " + WithCommas(e.count) + " 次")
+                    .value(e.name + " " + WithCommas(e.count) + " " +
+                           Utf8(PadUnitSuffixForCount(e.analog)))
                     .anchor(bx + barW * 0.5f, by)
                     .bounds(w, h)
                     .style(components::TooltipStyle(tk))

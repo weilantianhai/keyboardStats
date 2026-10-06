@@ -9,6 +9,7 @@ build/
 .verify/
 .verify/
 KeyboardStats-v*.zip
+KeyboardStats-latest-win64.zip
 .git-new/
 .icons/
 .icons2/
@@ -16,3 +17,6 @@ export-test.csv
 not-data.jsonl
 tools/fn-diag.log
 .diag/
+build-preview/
+.preview/
+.preview-cfg/

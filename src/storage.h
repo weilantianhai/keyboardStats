@@ -1,4 +1,6 @@
 #pragma once
+#include "layout.h"   // KeyCode / kKeySlots：键码空间（键鼠 + 手柄）定义
+#include <windows.h>  // DWORD / INFINITE：数据变化通知的等待接口
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -8,7 +10,30 @@
 void StorageInit();
 
 // 钩子回调调用：事件计入当日聚合、事件行入缓冲。必须快，不做磁盘 I/O。
-void RecordKey(uint8_t vk);
+void RecordKey(KeyCode vk);
+
+// 手柄模拟量行程增量提交（采集线程每个采样周期调用一次）。
+// 传的是**路程长度**增量（不是位置）：
+//   stickL / stickR = 该周期内左右摇杆走过的归一化路程（1.0 = 一个满量程半径）
+//   trigL  / trigR  = 该周期内左右扳机行程增量（1.0 = 从松到底一次）
+// 内部按（日, 时）聚合，不逐次落盘——模拟量每秒可产生几十次增量，逐次写会把文件撑爆。
+void PadTravelAdd(float stickL, float stickR, float trigL, float trigR);
+
+// 手柄行程的累计结果（"里程表"读数）。
+// 单位是**等效次数**：满推往返次数 / 满按到底次数（显示层再按偏好折算成毫米）。
+struct PadTravel {
+    double stickL = 0.0;   // 左摇杆累计等效满推往返次数
+    double stickR = 0.0;   // 右摇杆
+    double trigL  = 0.0;   // 左扳机累计等效满按次数
+    double trigR  = 0.0;   // 右扳机
+};
+
+// 查询某时间段内累计的手柄行程。mode/from/to 语义与 QueryRange 一致
+// （0=今天 1=最近7天 2=最近30天 3=全部 4=自定义）。
+PadTravel PadTravelQuery(int mode, uint32_t from, uint32_t to);
+
+// 今日累计的手柄行程（看板/活跃分数用，等价于 PadTravelQuery(0,0,0)）
+PadTravel PadTravelToday();
 
 // 由主窗口 WM_TIMER 周期调用：满 5 秒且缓冲非空则追加落盘。
 void StorageFlushIfDue();
@@ -88,7 +113,7 @@ struct Bucket {
 
 // 一个时间段上的统计结果（热力图 + 直方图共用）。
 struct RangeStats {
-    long counts[256] = {};                  // 该时段内每键次数
+    long counts[kKeySlots] = {};            // 该时段内每键次数（键鼠 + 手柄统一索引）
     long total = 0;
     std::vector<Bucket> buckets;            // 直方图柱，已按时间排序
 };
@@ -101,6 +126,7 @@ struct TodayBreakdown {
     long keyboard = 0;     // 键盘按键（不含鼠标/滚轮）
     long mouseClicks = 0;  // 鼠标点击（左右/中/侧键，不含滚轮）
     long wheel = 0;        // 滚轮格数
+    long pad = 0;          // 手柄按键（XInput 数字键）
 };
 TodayBreakdown StorageTodayBreakdown();
 
@@ -126,6 +152,14 @@ bool StorageExportCsv(const std::wstring& path, long* outCount);
 // 并切换为当前数据文件后重新载入。原位置不再保留该文件。
 // 返回载入后的事件条数；失败返回 -1 并在 error 写入原因。
 long StorageAdoptJsonl(const std::wstring& path, std::wstring* error);
+
+// 合并数据文件：把数据文件夹里**除当前文件外**的所有数据文件的事件行
+// 追加到当前数据文件，成功后删除源文件。
+// 场景：新建过多个 data-*.jsonl 或转入过文件，数据分散在多处，想并成一份。
+// mergedFiles/mergedEvents 回传合并的文件数与事件条数（可为 nullptr）。
+// 任一文件读取失败就跳过它（不删，数据不丢）；追加失败则中止并报错。
+// 返回 true 表示至少合并了一个文件（没有可合并的文件时返回 false 且 error 说明）。
+bool StorageMergeDataFiles(int* mergedFiles, long* mergedEvents, std::wstring* error);
 
 // 清除全部记录（清空当前数据 + 内存缓存；顺带清理旧版本遗留的 counts.json）
 void StorageClearAll();
@@ -153,3 +187,14 @@ inline constexpr wchar_t kIpcRecorderMutex[] = L"Local\\KeyboardStats.Recorder";
 inline constexpr wchar_t kIpcGuiMutex[]      = L"Local\\KeyboardStats.Gui";
 inline constexpr wchar_t kIpcReload[]        = L"Local\\KeyboardStats.Reload";
 inline constexpr wchar_t kIpcShutdown[]      = L"Local\\KeyboardStats.Shutdown";
+// record → GUI 的**反向**数据变化通知（kIpcReload 是 GUI → record，方向相反）。
+// 记录进程每次落盘后 SetEvent，GUI 收到才去读新增的那几行——不再靠定时器轮询文件。
+inline constexpr wchar_t kIpcDataChanged[]   = L"Local\\KeyboardStats.DataChanged";
+
+// 记录进程落盘后通知 GUI（有变更才通知；GUI 已关闭时事件对象随之销毁，SetEvent 无害失败）
+void StorageNotifyDataChanged();
+// GUI 侧等待数据变化：timeoutMs 传 INFINITE 阻塞等待，传 0 做非阻塞探测。
+// 返回 true 表示期间收到过通知。
+bool StorageWaitDataChanged(DWORD timeoutMs);
+// 结束等待并释放句柄（GUI 关闭时调用；g_days 等内存缓存随进程退出自然释放）
+void StorageStopDataChangedWait();

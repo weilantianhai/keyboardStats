@@ -49,6 +49,41 @@ bool g_adminHighlight = false;
 
 unsigned long long g_adminHighlightAt = 0;
 
+// 调试开关：启动参数带 --padseed 时给手柄灌假数据（见 app::MaybeSeedGamepad 与
+// DrawPadPanel 的模拟量兜底），用于手边没接手柄时核对面板渲染与分组归一化
+bool DebugPadSeed() {
+    static const bool enabled = wcsstr(GetCommandLineW(), L"--padseed") != nullptr;
+    return enabled;
+}
+
+bool DebugPadMirror(SharedPadAnalog* out) {
+    if (!out) return false;
+    // 缓存：命令行只解析一次；文件内容每帧都读（几十字节，可忽略），
+    // 因为有缓存 mtime 反而更容易漏掉"同一秒内改了两次"。
+    static const wchar_t* path = []() -> const wchar_t* {
+        const wchar_t* p = wcsstr(GetCommandLineW(), L"--padmirror=");
+        return p ? (p + wcslen(L"--padmirror=")) : nullptr;
+    }();
+    if (!path || !*path) return false;
+
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    char buf[256] = {0};
+    DWORD got = 0;
+    const BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &got, nullptr);
+    CloseHandle(h);
+    if (!ok || got == 0) return false;
+
+    float v[6] = {0, 0, 0, 0, 0, 0};
+    if (sscanf_s(buf, "%f %f %f %f %f %f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6)
+        return false;
+    out->lx = v[0]; out->ly = v[1];
+    out->rx = v[2]; out->ry = v[3];
+    out->lt = v[4]; out->rt = v[5];
+    return true;
+}
+
 void DebugHighlightAdmin() {
     g_page = 2;
     g_adminHighlight = true;

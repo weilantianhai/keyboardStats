@@ -101,6 +101,43 @@ int main() {
         printInfo("恢复自动后（应为 1864 上下）");
     }
 
+    // ── 合并数据文件：在**干净的子目录**里做（外层测试目录里积累了历次运行的
+    //    新建/导出文件，混进来只会让断言没法写）。流程：新建 a 写一行 → 新建 b
+    //    写一行 → 切回 a → 合并 → b 应消失、事件应相加；自动模式应拒绝合并。──
+    {
+        const std::wstring clean = DataFolderPath() + L"\\merge-case";
+        CreateDirectoryW(clean.c_str(), nullptr);
+        std::wstring err, a, b;
+        StorageSetDataFolder(clean, false, &err, nullptr);
+        StorageCreateDataFile(&a, &err);
+        FILE* f = _wfopen(DataFilePath().c_str(), L"ab");
+        if (f) { fputs("{\"k\":65,\"t\":\"2026-09-17T10:00:00.000\"}\n", f); fclose(f); }
+        StorageFlushNow();
+        StorageCreateDataFile(&b, &err);
+        f = _wfopen(DataFilePath().c_str(), L"ab");
+        if (f) { fputs("{\"k\":66,\"t\":\"2026-09-17T11:00:00.000\"}\n", f); fclose(f); }
+        StorageFlushNow();
+        StorageSetDataFile(a, &err);
+        printf("[合并前] 当前=%ls  文件数=%d\n",
+               DataFileName().c_str(), (int)DataFilesInFolder(clean).size());
+
+        int files = 0; long events = 0; std::wstring merr;
+        const bool ok = StorageMergeDataFiles(&files, &events, &merr);
+        printf("[合并] ok=%d files=%d events=%ld err=%ls（ok 应 1，files 应 1，events 应 1）\n",
+               (int)ok, files, events, merr.c_str());
+        printf("[合并后] 文件数=%d（应 1）  b 已删?%d  当前仍是 a?%d\n",
+               (int)DataFilesInFolder(clean).size(),
+               (int)(GetFileAttributesW((clean + L"\\" + b).c_str()) == INVALID_FILE_ATTRIBUTES),
+               (int)(DataFileName() == a));
+
+        // 自动模式（当前文件为空名）应拒绝合并而不是乱写
+        StorageSetDataFile(L"", &merr);
+        const bool autoOk = StorageMergeDataFiles(&files, &events, &merr);
+        printf("[自动模式拒绝合并] ok=%d（应 0） 提示非空?%d\n",
+               (int)autoOk, (int)!merr.empty());
+        StorageSetDataFolder(DataFolderPath(), false, &err, nullptr);
+    }
+
     StorageClearAll();
     printInfo("清除后（应为 0）");
     return 0;

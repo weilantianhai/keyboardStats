@@ -104,11 +104,23 @@ if ($gone.Count) { throw ("压缩包内缺少运行时资源：" + ($gone -join 
 $zi = Get-Item $zip
 Write-Host ""
 Write-Host "包内清单（assets 共 $assetCount 项）："
-$names | Where-Object { $_ -notlike 'assets/shaders/*' } |
+    $names | Where-Object { $_ -notlike 'assets/shaders/*' } |
     ForEach-Object { '  {0,10:N0}  {1}' -f $sizes[$_], $_ }
-$shaderN = ($names | Where-Object { $_ -like 'assets/shaders/*' }).Count
-if ($shaderN) { Write-Host ("  ...另有 assets/shaders/ 下 {0} 项（框架资源，一并带上）" -f $shaderN) }
-Write-Host ""
-Write-Host ("ZIP : {0}" -f $zip)
-Write-Host ("大小: {0:N0} bytes ({1:N2} MB)" -f $zi.Length, ($zi.Length / 1MB))
-Write-Host ("SHA256: {0}" -f (Get-FileHash $zip -Algorithm SHA256).Hash)
+    $shaderN = ($names | Where-Object { $_ -like 'assets/shaders/*' }).Count
+    if ($shaderN) { Write-Host ("  ...另有 assets/shaders/ 下 {0} 项（框架资源，一并带上）" -f $shaderN) }
+    Write-Host ""
+    Write-Host ("ZIP : {0}" -f $zip)
+    Write-Host ("大小: {0:N0} bytes ({1:N2} MB)" -f $zi.Length, ($zi.Length / 1MB))
+    Write-Host ("SHA256: {0}" -f (Get-FileHash $zip -Algorithm SHA256).Hash)
+
+# ── 6) 再产出一份**固定名**的包，供 README 的"直接下载最新版"直链使用 ──
+# 为什么需要：GitHub 的 releases/latest/download/<文件名> 是按**精确文件名**匹配的。
+# 带版本号的资产名（KeyboardStats-v1.0.4-win64.zip）会让那个直链永远 404，
+# 所以上传 release 时请用这里产出的 KeyboardStats-latest-win64.zip。
+if ($Version -ne 'latest') {
+    $latestZip = Join-Path $root 'KeyboardStats-latest-win64.zip'
+    if (Test-Path $latestZip) { Remove-Item $latestZip -Force }
+    Copy-Item $zip $latestZip
+    Write-Host ""
+    Write-Host ("另产出（供 README 直链）: {0}" -f $latestZip)
+}

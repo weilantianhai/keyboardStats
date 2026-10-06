@@ -13,6 +13,7 @@
 #include "fontscale.h"
 #include "recorder.h"
 #include "pref.h"
+#include "padpref.h"        // 活跃分数权重 + 摇杆行程折算（列表与看板共用同一口径）
 #include "win/adminmode.h"
 #include "win/autostart.h"
 
@@ -20,6 +21,7 @@
 #include <exception>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -43,12 +45,15 @@ std::string g_rangeText;
 
 eui::Signal<bool> g_fromOpen{false};
 eui::Signal<bool> g_toOpen{false};
-// 按键筛选 g_keyFilter 与四个峰值定义在 heatnorm.cpp（统计层）
+// 按键筛选 g_keyFilter 与各组峰值定义在 heatnorm.cpp（统计层）
 
 static bool g_startHidden = false;
 static bool g_uiServicesReady = false;
 static UINT_PTR g_timerId = 0;
 static bool g_selfRecording = false;   // 记录进程拉不起来时，GUI 兜底自己记录
+// 消息窗口句柄 + 记录进程落盘通知的等待线程（数据重载改由事件驱动，退出时清理）
+static HWND s_msgWnd = nullptr;
+static HANDLE s_dataWaitThread = nullptr;
 
 // 窗口最小尺寸：启动阶段的重试计数与执行函数（实现见文件后部）
 static int  s_enforceLeft = 20;   // 最多尝试次数（500ms/次）
@@ -72,6 +77,18 @@ static std::string RangeTitle() {
     }
 }
 
+// 调试用（--padseed）：给手柄按键灌入梯度假数据。
+// 用途：手边没接手柄时也能验证手柄面板的渲染、热力分组与布局（截图核对用），
+// 只在显式加了这个参数时生效，正常启动完全不受影响。
+static void MaybeSeedGamepad(RangeStats& s) {
+    if (!DebugPadSeed()) return;
+    long v = 900;
+    for (const PadDef& p : kPadButtons) {
+        s.counts[p.vk] += v;
+        v = std::max(12L, v * 3 / 4);
+    }
+}
+
 void FetchStats() {
     uint32_t today = TodayLocal();
     uint32_t from = 0, to = 0;
@@ -88,9 +105,10 @@ void FetchStats() {
     }
 
     RangeStats s = QueryRange(g_rangeMode, from, to);
+    MaybeSeedGamepad(s);   // 调试开关 --padseed（见函数定义）
 
-    // 峰值不只是一个数：全局峰值供"全部"模式跨组对比，另外三组各自留一份，
-    // 供键盘 / 鼠标 / 分开模式按组独立归一（滚轮不再碾压点击次数）。
+    // 峰值不只是一个数：全局峰值供"全部"模式跨组对比，另外各组各自留一份，
+    // 供键盘 / 鼠标 / 手柄 / 分开模式按组独立归一（滚轮不再碾压点击，键盘不再碾压手柄）。
     HeatMaximaFromCounts(s.counts);
 
     // barChart 组件把 values 当作 0~1 比例（内部 clamp 后乘绘图高度），因此必须传
@@ -110,31 +128,62 @@ void FetchStats() {
         g_barLabels.push_back(label);
     }
 
-    // 按键分布：全键参与（含小键盘与鼠标伪键），未使用的计数为 0，升序排列。
+    // 按键分布：全键参与（含小键盘、鼠标伪键与手柄），未使用的计数为 0，升序排列。
     // 这样小键盘数字（1`、2`…）即使在未使用/NumLock 关闭时也能在直方图中被识别。
     g_keyHist.clear();
     {
-        std::vector<std::tuple<long, std::string, bool, uint8_t>> all;
-        std::vector<uint8_t> seen;
-        auto add = [&](uint8_t vk) {
-            for (uint8_t s : seen) if (s == vk) return;   // 主键区/小键盘的回车等重复键码
-            seen.push_back(vk);
+        std::vector<TopEntry> all;
+        auto add = [&](KeyCode vk) {
+            for (const TopEntry& e : all) if (e.vk == vk) return;   // 主键区/小键盘的回车等重复键码
             const wchar_t* nm = StatName(vk);
-            all.push_back({(vk < 256) ? s.counts[vk] : 0,
-                           nm ? Utf8(nm) : ("VK" + std::to_string(vk)),
-                           IsMouseKey(vk), vk});
+            TopEntry e;
+            e.vk = vk;
+            e.name = nm ? Utf8(nm) : ("VK" + std::to_string((int)vk));
+            e.count = (vk < kKeySlots) ? s.counts[vk] : 0;
+            e.group = KeyGroupOf(vk);
+            all.push_back(std::move(e));
         };
         for (int i = 0; i < kKeyCount; ++i) add(kKeys[i].vk);
-        for (uint8_t vk : {kMouseLeft, kMouseRight, kMouseMiddle, kMouseX1, kMouseX2,
+        for (KeyCode vk : {kMouseLeft, kMouseRight, kMouseMiddle, kMouseX1, kMouseX2,
                            kWheelUp, kWheelDown, kWheelLeft, kWheelRight}) add(vk);
+        for (const PadDef& pad : kPadButtons) add(pad.vk);
+
+        // 摇杆/扳机：没有"次数"，只有行程。用与活跃分数**同一套折算**把它们变成
+        // 等效次数，才能和按键一起出现在排行榜里（口径不一致会让用户没法验算）：
+        //   摇杆 行程→满推往返次数（PadStickTripsFromTravel，走 2 个半径 = 1 次）
+        //   扳机 行程本身就是"满按次数"（0..1 = 一次到底）
+        // 注意用 PadTravelQuery 而不是 PadTravelToday：列表要跟随当前时间段
+        // （今天/7天/30天/自定义），否则切到"最近7天"时手柄那几项永远是今天的数。
+        //
+        // 这里**必须**再过一道 PadUnitGet()：设置页的"行程显示单位"开关就是靠
+        // 这一步起作用的（切到毫米时 count 变成物理毫米数）。早先漏了这道换算，
+        // 于是开关只写偏好、界面毫无变化——成了个摆设。
+        {
+            const PadTravel tv = PadTravelQuery(g_rangeMode, from, to);
+            const PadUnit unit = PadUnitGet();
+            const auto addAnalog = [&](KeyCode vk, double equivalent, bool isStick) {
+                TopEntry e;
+                e.vk = vk;
+                e.name = Utf8(StatName(vk));
+                e.count = (long)std::lround(isStick ? PadStickToDisplay(equivalent, unit)
+                                                    : PadTriggerToDisplay(equivalent, unit));
+                e.group = KeyGroupOf(vk);
+                e.analog = true;
+                all.push_back(std::move(e));
+            };
+            addAnalog(kPadStickL, PadStickTripsFromTravel(tv.stickL), true);
+            addAnalog(kPadStickR, PadStickTripsFromTravel(tv.stickR), true);
+            addAnalog(kPadTrigL,  tv.trigL, false);
+            addAnalog(kPadTrigR,  tv.trigR, false);
+        }
+
         long top1 = 0;
-        for (const auto& kv : all) top1 = std::max(top1, std::get<0>(kv));
+        for (const TopEntry& e : all) top1 = std::max(top1, e.count);
         std::stable_sort(all.begin(), all.end(),
-                         [](const auto& a, const auto& b) { return std::get<0>(a) < std::get<0>(b); });
-        for (const auto& kv : all) {
-            g_keyHist.push_back({std::get<3>(kv), std::get<1>(kv), std::get<0>(kv),
-                                 top1 > 0 ? (float)std::get<0>(kv) / (float)top1 : 0.0f,
-                                 std::get<2>(kv)});
+                         [](const TopEntry& a, const TopEntry& b) { return a.count < b.count; });
+        for (TopEntry& e : all) {
+            e.frac = top1 > 0 ? (float)e.count / (float)top1 : 0.0f;
+            g_keyHist.push_back(std::move(e));
         }
     }
 
@@ -151,15 +200,39 @@ static bool StatsDiffer(const RangeStats& a, const RangeStats& b) {
     return false;
 }
 
-// 键鼠按下动画的驱动：框架是事件驱动渲染，按键状态变化不会自己触发重绘。
-// 16ms 轮询一次共享状态，只在"最近 1 秒内有按键事件"时请求重绘（平时开销≈0）。
+// 键鼠按下动画 + 手柄模拟量面板的驱动：框架是事件驱动渲染，状态变化不会自己触发重绘。
+// 16ms 轮询一次共享状态，只在"最近有输入在动"时请求重绘（平时开销≈0）。
+// 必须把 SharedPadAnalogAlive 也算进来：推摇杆/按扳机**不产生键鼠事件**，
+// tick 不会变，只看 SharedKeyAlive 的话面板内圈和行程柱永远不刷新。
 static void CALLBACK TickKeyAnim(HWND, UINT, UINT_PTR, DWORD) {
-    if (SharedKeyAlive()) app::requestUpdate();
+    // 调试旁路（--padmirror=<文件>）：注入器进程拿不到共享内存的写入句柄，
+    // padTick 不动 → SharedPadAnalogAlive() 恒为 false。此时改读文件，
+    // 只要读到合法数值就持续请求重绘，才能验证"数值变了界面跟不跟着动"。
+    SharedPadAnalog mirror;
+    if (app::DebugPadMirror(&mirror) || SharedKeyAlive() || SharedPadAnalogAlive())
+        app::requestUpdate();
+}
+
+// 手柄行程（摇杆/扳机）变化的粗比较：只看四个总量。
+// 单独做这件事的原因：行程**不进 QueryRange**（那是键鼠的按键表），
+// 所以纯推摇杆时 StatsDiffer 恒为 false，看板上的"活跃分数"卡片就不会重算，
+// 表现为推摇杆/按扳机分数纹丝不动。
+static bool PadTravelDiffer(const PadTravel& a, const PadTravel& b) {
+    return a.stickL != b.stickL || a.stickR != b.stickR ||
+           a.trigL != b.trigL || a.trigR != b.trigR;
 }
 
 // 周期任务：驱动落盘 + 数据节流刷新（单线程）
 static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     StorageFlushIfDue();
+
+    // 排障（--padiag）：把 GUI 当前对接到的共享内存版本打到 %TEMP%。
+    // 这是判断"摇杆为什么不跟着动"的第一个岔路口——低于 3 说明 GUI 被降级到了
+    // 旧版本共享内存，模拟量那段字段根本不存在，再怎么查绘制都是白费。
+    {
+        static bool diag = wcsstr(GetCommandLineW(), L"--padiag") != nullptr;
+        if (diag) PadDiagLogVersion();
+    }
 
     // 兜底自记录的善后：若记录进程只是启动慢（EnsureRecorderRunning 超时误判），
     // 它一起来就立刻卸掉自己的钩子，避免双钩子把同样的按键记两遍。
@@ -172,8 +245,16 @@ static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
             StorageReloadFull();   // 以文件为准重载（可能与记录进程有少量重复，可接受）
         }
     } else {
-        // 记录进程每 5 秒落盘，GUI 这里增量同步（文件没变时开销≈0）
-        StorageReloadIfChanged();
+        // 兜底：通知是主路径（记录进程落盘 → PostMessage → 增量重载）。
+        // 这里只留一个**低频**自检——防的是通知丢失的边角情况（record 崩溃后被
+        // 重新拉起、用户手工往数据文件夹放了文件、事件对象被别的进程抢先销毁等）。
+        // 文件没变时 StorageReloadIfChanged 内部只比大小，不读内容，开销≈0；
+        // 但仍不该每 500ms 就问一次文件系统，所以拉到 5 秒一次。
+        static int tick = 0;
+        if (++tick >= 10) {   // 500ms × 10 = 5s
+            tick = 0;
+            StorageReloadIfChanged();
+        }
     }
 
     TickFontScale(GetTickCount64() / 1000.0);   // 字号滑块：值稳定后才应用
@@ -183,6 +264,17 @@ static void CALLBACK TickTimer(HWND, UINT, UINT_PTR, DWORD) {
     RangeStats fresh = QueryRange(g_rangeMode, g_customFrom, g_customTo);   // 粗比较即可
     if (StatsDiffer(fresh, g_stats)) {
         FetchStats();
+        app::requestUpdate();
+    }
+
+    // 行程变化也要重绘（否则纯手柄操作时看板分数不刷新）。
+    // 缓存上次的值：只在真的变了才请求重绘，不引入常态重绘开销。
+    static PadTravel s_lastTravel;
+    static bool s_travelInit = false;
+    const PadTravel travel = PadTravelToday();
+    if (!s_travelInit || PadTravelDiffer(travel, s_lastTravel)) {
+        s_lastTravel = travel;
+        s_travelInit = true;
         app::requestUpdate();
     }
 }
@@ -224,6 +316,15 @@ void SetCloseAction(int mode) {
 void ExitAppNow() {
     // ExitProcess 不跑 atexit 回调，所以这里手动做掉它该做的事
     // （GUI 模式下钩子/缓冲只有兜底自记录时才有内容，平调无害）
+    // 结束数据变化等待线程：它正阻塞在事件上，先置退出标志把它唤醒并等它收尾，
+    // 免得它在我们销毁窗口后还 PostMessage（g_days 等内存缓存随进程退出自然释放）。
+    StorageStopDataChangedWait();
+    if (s_dataWaitThread) {
+        WaitForSingleObject(s_dataWaitThread, 1000);
+        CloseHandle(s_dataWaitThread);
+        s_dataWaitThread = nullptr;
+    }
+    s_msgWnd = nullptr;
     RemoveHook();
     StorageFlushNow();
     ExitProcess(0);
@@ -320,6 +421,26 @@ static void EnforceMinSizeOnce() {
                  SWP_NOMOVE | SWP_NOZORDER);
 }
 
+// 等待线程：阻塞等"记录进程落盘"事件，收到后 PostMessage 唤醒主线程去重载。
+// 为什么不直接在定时器里轮询文件：轮询每次都要问文件系统，且数据要等下一个 tick；
+// 事件驱动则是"落盘即通知"，延迟从最多 500ms 降到接近 0，空闲时也完全不占 CPU。
+static DWORD WINAPI DataChangedWaitProc(LPVOID) {
+    while (StorageWaitDataChanged(INFINITE)) {
+        if (!s_msgWnd) break;
+        if (!PostMessageW(s_msgWnd, WM_APP + 1, 0, 0)) break;
+    }
+    return 0;
+}
+
+static LRESULT CALLBACK MsgWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_APP + 1) {
+        // 记录进程刚落盘：增量读入新增的行（内部自己比对偏移，没变就是空跑）
+        StorageReloadIfChanged();
+        return 0;
+    }
+    return DefWindowProcW(h, msg, wp, lp);
+}
+
 static void EnsureUiServices() {
     if (g_uiServicesReady) return;
     g_uiServicesReady = true;
@@ -328,15 +449,18 @@ static void EnsureUiServices() {
 
     // 消息专用窗口：承载落盘/刷新定时器（与 GLFW 消息泵同线程）
     WNDCLASSW wc = {};
-    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpfnWndProc = MsgWndProc;
     wc.lpszClassName = L"KeyboardStatsMsgWnd";
     RegisterClassW(&wc);
     HWND msg = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
                                nullptr, nullptr, nullptr);
+    s_msgWnd = msg;
     if (msg) {
         g_timerId = SetTimer(msg, 1, 500, TickTimer);
         SetTimer(msg, 2, 16, TickKeyAnim);   // 按下动画驱动
     }
+    // 数据变化等待线程（GUI 侧）；"GUI 启动时自己加载一次"由 StorageInit 负责
+    s_dataWaitThread = CreateThread(nullptr, 0, DataChangedWaitProc, nullptr, 0, nullptr);
 
     FetchStats();
 
@@ -390,6 +514,11 @@ const DslAppConfig& dslAppConfig() {
 
         // ── GUI 单实例：已有实例时等待其退出（管理员重启流程中旧实例会延迟退出），
         //    超时后按旧行为唤起已有窗口并退出 ──
+        //    旁路（--preview-instance）：开发截图需要预览构建与用户正在使用的正式
+        //    实例**并存**——否则只要正式版开着，预览进程就会撞上互斥体、唤起别人的
+        //    窗口然后自己退出，截图脚本只能拿到"退出码 0"而永远找不到窗口。
+        //    仅显式带参数时生效，正常启动行为完全不变。
+        if (!wcsstr(GetCommandLineW(), L"--preview-instance")) {
         HANDLE guiMutex = CreateMutexW(nullptr, TRUE, kIpcGuiMutex);
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
             const bool elevatedNow = RunningElevated();
@@ -405,6 +534,7 @@ const DslAppConfig& dslAppConfig() {
             }
         }
         (void)guiMutex;   // 持有至进程退出
+        }   // --preview-instance 旁路结束
 
         // ── 确保记录进程在跑；拉不起来则 GUI 兜底自己记录（老行为）──
         // 提权实例接管时：先请普通权限的旧记录进程**优雅下场**（落盘 + 注销托盘），
@@ -466,11 +596,11 @@ const DslAppConfig& dslAppConfig() {
             const int n = _wtoi(p + 7);
             if (n >= 1 && n <= 2) g_debugPick = n;
         }
-        // 调试用：--filter=N 启动即选中按键筛选（0键盘 1鼠标 2全部 3分开）。
+        // 调试用：--filter=N 启动即选中按键筛选（0键盘 1鼠标 2手柄 3全部 4分开）。
         // 用于按筛选模式截图核对热力着色（哪种模式哪个区域该着色）。
         if (const wchar_t* p = wcsstr(GetCommandLineW(), L"--filter=")) {
             const int n = _wtoi(p + 9);
-            if (n >= 0 && n <= 3) g_keyFilter = n;
+            if (n >= 0 && n <= 4) g_keyFilter = n;
         }
         return true;
     }();
@@ -481,7 +611,7 @@ const DslAppConfig& dslAppConfig() {
         .pageId("kbstats")
         .clearColor({g_theme.bg.r, g_theme.bg.g, g_theme.bg.b, 1.0f})
         .windowSize(1180, 720)
-        .fps(60.0)
+        .fps(90.0)   // 渲染帧率上限：与手柄**采样率**无关（那个在设置页，30/62/125Hz）
         .iconPath(AssetAbs("icon.png"))
         // 托盘属于记录进程（常驻的那个）；GUI 不再挂第二个图标
         .tray(false)

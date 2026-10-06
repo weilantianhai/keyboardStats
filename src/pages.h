@@ -1,6 +1,7 @@
 #pragma once
 // 页面绘制：头部、控制行、热力图页、Top 10、直方图页
 #include "eui_neo.h"
+#include "hook.h"   // SharedPadAnalog（调试旁路的出参类型）
 
 namespace app {
 
@@ -24,5 +25,18 @@ void DrawOnboardDialog(core::dsl::Ui& ui, const eui::Screen& screen);
 bool AdminHighlightActive();
 // 调试：跳转设置页并触发管理员开关闪烁引导（--hladmin）
 void DebugHighlightAdmin();
+// 调试开关：启动参数带 --padseed（给手柄灌梯度假数据 + 固定模拟量），
+// 用于手边没有手柄时核对面板渲染、分组归一化与摇杆/扳机显示
+bool DebugPadSeed();
+
+// 调试旁路：启动参数带 --padmirror=<文件> 时，摇杆/扳机不再从共享内存取，
+// 改读该文件里的一行 "lx ly rx ry lt rt"。
+//
+// 为什么需要它：共享内存的写入句柄是**独占**的——真手柄在跑时写入方是记录进程，
+// 而开发时为了让界面出图会另起注入器进程，两者抢同一个映射名，后者往往被挡在门外，
+// 界面读到的仍是记录进程发布的全 0（没插真手柄就永远是 0），
+// 于是"数值变了界面跟不跟着动"这件事根本测不出来。
+// 旁路直接读文件，绕开独占问题。正常启动完全不受影响。
+bool DebugPadMirror(SharedPadAnalog* out);
 
 } // namespace app

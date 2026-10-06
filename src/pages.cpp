@@ -1,7 +1,7 @@
 // 页面绘制实现：头部 / 控制行 / 主页看板 / 热力图页 / 按键计数列表。
 // 设置页、主题页、直方图页与两个弹窗已按页面拆到 pages_*.cpp；
 // 跨页面共享的小构件与状态在 pages_common.h/.cpp；
-// 热力着色的归一化（键盘/鼠标点击/滚轮三组峰值）在 heatnorm.cpp。
+// 热力着色的归一化（键盘/鼠标点击/滚轮/手柄四组峰值）在 heatnorm.cpp。
 #include "pages.h"
 #include "pages_common.h"
 #include "theme.h"
@@ -13,6 +13,7 @@
 #include "components/components.h"
 #include "timeutil.h"
 #include "storage.h"
+#include "padpref.h"
 #include "hook.h"
 #include "win/adminmode.h"
 
@@ -30,6 +31,8 @@ float s_kbScale = 1.0f;      // 键盘尺寸系数（相对盒内自适应值）
 
 float s_mouseScale = 1.0f;   // 鼠标尺寸系数
 
+float s_padScale = 1.0f;     // 手柄尺寸系数
+
 float s_split = 0.68f;       // 外盒 / 按键计数区 的边界位置（内容宽度的比例）
 
 bool  s_layoutLoaded = false;
@@ -39,6 +42,7 @@ void EnsureLayoutPrefs() {
     s_layoutLoaded = true;
     s_kbScale    = std::clamp((float)atof(PrefGetValue(L"ui-layout.txt", "kb", "1.0").c_str()), 0.6f, 1.6f);
     s_mouseScale = std::clamp((float)atof(PrefGetValue(L"ui-layout.txt", "mouse", "1.0").c_str()), 0.6f, 1.8f);
+    s_padScale   = std::clamp((float)atof(PrefGetValue(L"ui-layout.txt", "pad", "1.0").c_str()), 0.6f, 1.8f);
     s_split      = std::clamp((float)atof(PrefGetValue(L"ui-layout.txt", "split", "0.68").c_str()), 0.30f, 0.90f);
 }
 
@@ -48,18 +52,16 @@ void SaveLayoutPref(const char* key, float value) {
     PrefSetValue(L"ui-layout.txt", key, buf);
 }
 
-// 最近被调节的一方：1=键盘 2=鼠标。被调方保持尺寸，另一方吸收剩余空间。
-int s_resizeDriver = 0;
-
 // 叠放状态（带滞回，避免拖动尺寸时在并排/叠放间来回跳）
 bool s_heatStacked = false;
-// 按键筛选（键盘/鼠标/全部/分开）已统一为全局的 g_keyFilter（见 state.h）：
+// 按键筛选（键盘/鼠标/手柄/全部/分开）已统一为全局的 g_keyFilter（见 state.h）：
 // 热力图着色、右侧按键计数列表、直方图页分布图三处共用同一个值。
 
-// 内盒右下角外侧的尺寸指示器：按住左键拖动无极调节（松手存档）
+// 内盒右下角外侧的尺寸指示器：按住左键拖动无极调节（松手存档）。
+// 分配规则与"谁在被拖"无关——三方各取用户值，放不下时先键盘让位再压缩侧盒，
+// 因此不需要区分调节方（早期版本用 driverId 决定谁保持尺寸，现已成为多余参数）。
 void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
-                  float* value, float minValue, float maxValue, const char* prefKey,
-                  int driverId) {
+                  float* value, float minValue, float maxValue, const char* prefKey) {
     const float s = Px(15.0f);
     ui.rect(id)
         .x(x).y(y).size(s, s)
@@ -69,8 +71,7 @@ void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
         .states(g_theme.panelHi, g_theme.panelActive, g_theme.selected)
         .transition(Motion())
         .animate(core::AnimProperty::Color)
-        .onDrag([value, minValue, maxValue, driverId](auto& e) {
-            s_resizeDriver = driverId;   // 本次调节由该方主导
+        .onDrag([value, minValue, maxValue](auto& e) {
             const float delta = (float)(e.deltaX + e.deltaY);
             if (delta == 0.0f) return;
             *value = std::clamp(*value * (1.0f + delta / 260.0f), minValue, maxValue);
@@ -88,16 +89,16 @@ void ResizeHandle(core::dsl::Ui& ui, const std::string& id, float x, float y,
     }
 }
 
-// 鼠标盒子：面板 + 机身，左右键/中键/侧键/滚轮（含上滑 ^ 下滑 v 键）按次数着色
-// ── 实时按键状态（记录进程写入共享内存，GUI 只读） ──
-static bool KeyPressedNow(unsigned char vk) {
+// ── 实时按键状态（记录进程写入共享内存，GUI 只读）──
+static bool KeyPressedNow(KeyCode vk) {
     const unsigned char* st = SharedKeyState();
-    if (!st || !st[vk]) return false;
+    if (!st || vk >= (KeyCode)SharedKeySlotCount() || !st[vk]) return false;
     // state 前面是 uint32 tick：超过 1 秒没有新事件则视为过期（防 UP 丢失卡在按下态）
     const unsigned long tick = *reinterpret_cast<const volatile unsigned long*>(st - 4);
     return (GetTickCount() - tick) < 1000;
 }
 
+// 鼠标盒子：面板 + 机身，左右键/中键/侧键/滚轮（含上滑 ^ 下滑 v 键）按次数着色
 void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
     const auto tk = CurrentTheme();
     ui.stack("mouse.page")
@@ -121,10 +122,10 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
                 .border(1.0f, g_theme.idleEdge)
                 .build();
 
-            auto button = [&](const std::string& id, uint8_t vk,
+            auto button = [&](const std::string& id, KeyCode vk,
                               float bx, float by, float bw, float bh, float radiusK,
                               const std::string& glyph = std::string(), float glyphK = 0.5f) {
-                const long c = (vk < 256) ? g_stats.counts[vk] : 0;
+                const long c = (vk < kKeySlots) ? g_stats.counts[vk] : 0;
                 // 归一化随筛选模式：键盘/鼠标/分开按各自组峰值，全部共用全局峰值
                 double t = HeatNorm(vk, c);
                 if (c > 0 && t < 0.08) t = 0.08;
@@ -191,6 +192,268 @@ void DrawMousePanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
         .build();
 }
 
+// 手柄盒子：Xbox 手柄示意（机身 = 整格圆角矩形，一层到底）。
+//   · 机身铺满整格；ABXY、View·Menu、十字键四向、摇杆圈按**次数**热力着色，按下实时亮起
+//   · 摇杆：大圈 = 内圈可移动范围，内圈按**实时模拟量**偏移（推杆即移动，松手回中）
+//   · 机身左右内侧各一条竖直行程柱，实时显示 LT / RT 的**按下量**（模拟量，不计入统计）
+//   · ABXY 菱形与右摇杆同轴（x=9.05），保证 A 键不被摇杆圈遮挡（见 layout.h）
+void DrawPadPanel(core::dsl::Ui& ui, float x, float y, float w, float h) {
+    const auto tk = CurrentTheme();
+    ui.stack("pad.page")
+        .x(x).y(y)
+        .size(w, h)
+        .content([&] {
+            // 面板底板：整格铺一层，给两侧 LT/RT 行程柱一个着落。
+            ui.rect("pad.sheet")
+                .size(w, h)
+                .color(g_theme.panel)
+                .radius(Px(14.0f))
+                .border(1.0f, g_theme.border)
+                .build();
+
+            // LT/RT 行程柱叠在机身左右内侧，因此手柄本体按"扣掉两条柱宽"的中间区域等比铺放。
+            // 缩放按**内容的实际包围盒**计算（而不是整个 12×8 设计框）——否则设计框里
+            // 未被使用的边距会白白占掉空间，手柄看起来又小又空。
+            const float pad = Px(8.0f);
+            const float innerW = std::max(Px(20.0f), w - pad * 2.0f);
+            const float innerH = std::max(Px(20.0f), h - pad * 2.0f);
+
+            // 内容包围盒 = 机身外接框 + 一点余量（避免描边被裁）。
+            constexpr float kContentX0 = 0.45f, kContentX1 = 11.54f;
+            constexpr float kContentY0 = 0.00f, kContentY1 = 7.95f;
+            constexpr float kContentW = kContentX1 - kContentX0;
+            constexpr float kContentH = kContentY1 - kContentY0;
+
+            const float barW = std::clamp(innerW * 0.058f, Px(5.0f), Px(13.0f));
+            const float barGap = std::max(Px(2.0f), innerW * 0.016f);
+            const float midW = std::max(Px(24.0f), innerW - (barW + barGap) * 2.0f);
+            const float s = std::min(midW / kContentW, innerH / kContentH);
+            // 把内容包围盒的左上角映射到棋盘格内的居中位置
+            const float ox = pad + barW + barGap + (midW - kContentW * s) * 0.5f - kContentX0 * s;
+            const float oy = pad + (innerH - kContentH * s) * 0.5f - kContentY0 * s;
+            const auto DX = [&](float v) { return ox + v * s; };
+            const auto DY = [&](float v) { return oy + v * s; };
+            const auto DS = [&](float v) { return v * s; };
+
+            // 一个按键的绘制参数：次数 / 热力填充色（叠加按下高亮）/ 是否按下 / 是否"有内容"
+            struct Paint { long count; core::Color fill; bool pressed; bool lit; };
+            const auto paint = [&](KeyCode vk) {
+                const long c = (vk < kKeySlots) ? g_stats.counts[vk] : 0;
+                double t = HeatNorm(vk, c);          // 归一化随筛选模式（四组可各自求峰值）
+                if (c > 0 && t < 0.08) t = 0.08;
+                core::Color fill = HeatColor(t);
+                const bool pressed = KeyPressedNow(vk);
+                if (pressed) fill = core::mixColor(fill, g_theme.selected, 0.55f);
+                return Paint{c, fill, pressed, c > 0 || pressed};
+            };
+            // 悬浮提示。行程条目（摇杆/扳机）的后缀跟"行程显示单位"开关走
+            // （次 / mm），与计数列表同一口径；键鼠/手柄按键固定"次"。
+            const auto tipText = [&](const std::string& id, const std::string& text,
+                                     float ax, float ay) {
+                components::tooltip(ui, id + ".tip")
+                    .theme(tk)
+                    .source(id)
+                    .value(text)
+                    .anchor(ax, ay)
+                    .bounds(w, h)
+                    .style(components::TooltipStyle(tk))
+                    .zIndex(300)
+                    .build();
+            };
+            const auto tip = [&](const std::string& id, KeyCode vk, long c,
+                                 float ax, float ay) {
+                tipText(id, Utf8(StatName(vk)) + " " + WithCommas(c) + " 次", ax, ay);
+            };
+            // 摇杆/扳机的**行程**悬浮：数据取自计数列表（FetchStats 已按单位折算）。
+            // 悬停大圈/扳机柱时给的是"走了多远"，而不是 L3/R3 的按下次数——
+            // 这两个量悬停时最容易混，分开呈现才不会让人对着 0 发呆。
+            const auto travelText = [&](KeyCode analogVk) {
+                for (const TopEntry& e : g_keyHist)
+                    if (e.vk == analogVk)
+                        return Utf8(StatName(analogVk)) + " 行程 " + WithCommas(e.count) +
+                               " " + Utf8(PadUnitSuffixForCount(true));
+                return Utf8(StatName(analogVk)) + " 行程 0 " +
+                       Utf8(PadUnitSuffixForCount(true));
+            };
+            const auto capText = [&](const std::string& id, const wchar_t* cap,
+                                     float bx, float by, float bw, float bh, bool lit) {
+                if (!cap || !cap[0]) return;
+                ui.text(id + ".cap")
+                    .x(bx).y(by).size(bw, bh)
+                    .text(Utf8(cap))
+                    .fontSize(std::max(Px(7.0f), std::min(bw, bh) * 0.62f))
+                    .lineHeight(bh)
+                    .color(lit ? Hex(0xFFFFFF) : g_theme.textMut)
+                    .horizontalAlign(core::HorizontalAlign::Center)
+                    .verticalAlign(core::VerticalAlign::Center)
+                    .build();
+            };
+            const auto polyPoints = [&](const PadPt* pts, int n) {
+                std::vector<core::Vec2> out;
+                out.reserve((size_t)n);
+                for (int i = 0; i < n; ++i) out.push_back({pts[i].x * s, pts[i].y * s});
+                return out;
+            };
+
+            // ① 机身本体：带握把的封闭多边形（layout.h 的 kPadBody）。
+            //    早先是"整格圆角矩形"，看着像一块板；换成轮廓后才能认出是手柄。
+            //
+            //    配色说明：一开始用 panelHi，结果在浅色方案下与底板几乎融为一体——
+            //    panelHi=#EEF2F8、panel=#FFFFFF 只差 17 级，白底上根本立不住轮廓。
+            //    改用 idleKey(#E6EAF2) + idleEdge(#C9D2E0) 描边：
+            //    与底板差 25 级、描边再差 29 级，深浅两套主题下轮廓都清晰。
+            //    注意**不能**给这个多边形加 .radius()：49 个顶点里有不少短边，
+            //    0.10 的圆角会让相邻圆角互相侵蚀、多边形自交，整块机身直接消失
+            //    （实测：只剩左上角一小块）。直线段在 60px/单位的缩放下已经够平滑。
+            ui.polygon("pad.body")
+                .x(ox).y(oy).size(kPadLayoutW * s, kPadLayoutH * s)
+                .points(polyPoints(kPadBody, kPadBodyPointCount))
+                .color(g_theme.idleKey)
+                .border(1.4f, g_theme.idleEdge)
+                .build();
+            // ② 十字键外框（十字形多边形；小圆角只做边缘柔化，不影响十字轮廓）
+            ui.polygon("pad.dpad.frame")
+                .x(ox).y(oy).size(kPadLayoutW * s, kPadLayoutH * s)
+                .points(polyPoints(kPadDpadPoly, (int)(sizeof(kPadDpadPoly) / sizeof(kPadDpadPoly[0]))))
+                .color(g_theme.idleKey)
+                .border(1.0f, g_theme.idleEdge)
+                .radius(DS(0.06f))
+                .build();
+
+            // ③ 按键（肩键矩形 + 圆形键 + 十字键四向热力块）
+            for (const PadDef& b : kPadButtons) {
+                const Paint kp = paint(b.vk);
+                const std::string id = "pad." + std::to_string((int)b.vk);
+                if (b.shape == PadShape::Poly) {
+                    ui.polygon(id)
+                        .x(ox).y(oy).size(kPadLayoutW * s, kPadLayoutH * s)
+                        .points(polyPoints(b.pts, b.ptCount))
+                        .color(kp.fill)
+                        .border(kp.pressed ? 1.6f : 1.0f,
+                                kp.pressed ? g_theme.selected : g_theme.idleEdge)
+                        .radius(DS(0.10f))
+                        .build();
+                } else {
+                    const float bw = DS(b.w), bh = DS(b.h);
+                    const bool bumper = (b.vk == kPadLB || b.vk == kPadRB);
+                    ui.rect(id)
+                        .x(DX(b.x)).y(DY(b.y)).size(bw, bh)
+                        // 必须用 .states() 注册交互态：tooltip 靠 hoverOpacityFrom
+                        // 找 source 的 hoverBlend，而只有 interactive 元素才有；
+                        // 之前只写了 .instantStates()，悬停命中根本不存在，
+                        // 悬浮提示永远不弹（键盘键帽能弹正是因为它有 .states()）。
+                        // hover 色轻微提亮给出悬停反馈；按下高亮已由 kp.pressed 处理。
+                        .states(kp.fill,
+                                core::mixColor(kp.fill, core::Color{1, 1, 1, 1}, 0.22f),
+                                kp.fill)
+                        .radius(b.shape == PadShape::Round ? std::min(bw, bh) * 0.5f
+                              : bumper                      ? std::min(bw, bh) * 0.38f
+                                                            : std::min(bw, bh) * 0.18f)
+                        .border(kp.pressed ? 1.6f : 1.0f,
+                                kp.pressed ? g_theme.selected : g_theme.idleEdge)
+                        .instantStates()
+                        .transition(Motion())
+                        .animate(core::AnimProperty::Color)
+                        .build();
+                }
+                capText(id, b.cap, DX(b.x), DY(b.y), DS(b.w), DS(b.h), kp.lit);
+                tip(id, b.vk, kp.count, DX(b.x + b.w * 0.5f), DY(b.y));
+            }
+
+            // ④ 摇杆：大圈 = 可移动范围（L3/R3 的按下频率着色），内圈 = 实时位置
+            SharedPadAnalog analog;
+            bool analogOk = SharedPadAnalogRead(&analog);
+            // 调试旁路（--padmirror=<文件>）：共享内存写入句柄独占，注入器进程
+            // 常常抢不到，界面读到的就永远是记录进程发布的全 0，导致"数值变了
+            // 界面跟不跟着动"测不出来。旁路改读文件，仅显式带参数时生效。
+            if (DebugPadMirror(&analog)) analogOk = true;
+            // 调试（--padseed）：没有真手柄（读不到，或读到的全是 0）时用一组固定值核对
+            // 渲染——内圈偏移 + 两条行程柱；真手柄有非零值时照常用真值
+            const bool allZero = analog.lx == 0.0f && analog.ly == 0.0f &&
+                                 analog.rx == 0.0f && analog.ry == 0.0f &&
+                                 analog.lt == 0.0f && analog.rt == 0.0f;
+            if (DebugPadSeed() && (!analogOk || allZero)) {
+                analog = SharedPadAnalog{0.45f, 0.35f, -0.40f, 0.30f, 0.72f, 0.22f};
+                analogOk = true;
+            }
+            for (const PadStickDef& sd : kPadSticks) {
+                const Paint kp = paint(sd.vk);
+                const std::string id = "pad.stick." + std::to_string((int)sd.vk);
+                const float ccx = DX(sd.cx), ccy = DY(sd.cy);
+                const float range = DS(sd.range), dot = DS(sd.dot);
+                ui.rect(id + ".range")
+                    .x(ccx - range).y(ccy - range).size(range * 2.0f, range * 2.0f)
+                    .states(kp.fill,
+                            core::mixColor(kp.fill, core::Color{1, 1, 1, 1}, 0.22f),
+                            kp.fill)   // 注册交互态：大圈悬停要弹行程提示
+                    .radius(range)
+                    .border(kp.pressed ? 2.0f : 1.2f,
+                            kp.pressed ? g_theme.selected : g_theme.idleEdge)
+                    .instantStates()
+                    .transition(Motion())
+                    .animate(core::AnimProperty::Color)
+                    .build();
+                // 内圈位置：模拟量 x 向右为正、y 向上为正（屏幕坐标相反，故取负）
+                float ax = 0.0f, ay = 0.0f;
+                if (analogOk) {
+                    ax = (sd.axis == 0) ? analog.lx : analog.rx;
+                    ay = -((sd.axis == 0) ? analog.ly : analog.ry);
+                }
+                ui.rect(id + ".dot")
+                    .x(ccx + ax * std::max(0.0f, range - dot) - dot)
+                    .y(ccy + ay * std::max(0.0f, range - dot) - dot)
+                    .size(dot * 2.0f, dot * 2.0f)
+                    .color(g_theme.selected)
+                    .radius(dot)
+                    .border(1.0f, g_theme.panelHi)
+                    .build();
+                tipText(id + ".travel",
+                        travelText(sd.vk == kPadLS ? kPadStickL : kPadStickR),
+                        ccx, ccy - range);
+            }
+
+            // ⑤ 扳机行程柱（左右各一条：轨道 + 自底向上的行程 + 标签）
+            const float labelH = Px(13.0f);
+            const float barTop = pad;
+            const float barH = std::max(Px(18.0f), innerH - labelH - Px(4.0f));
+            const auto triggerBar = [&](const std::string& id, const wchar_t* label,
+                                        float value, float bx, KeyCode analogVk) {
+                ui.rect(id + ".track")
+                    .x(bx).y(barTop).size(barW, barH)
+                    .states(g_theme.idleKey,
+                            core::mixColor(g_theme.idleKey, core::Color{1, 1, 1, 1}, 0.22f),
+                            g_theme.idleKey)   // 注册交互态：柱体悬停要弹行程提示
+                    .radius(barW * 0.45f)
+                    .border(1.0f, g_theme.idleEdge)
+                    .build();
+                const float fillH = barH * std::clamp(value, 0.0f, 1.0f);
+                if (fillH > 0.6f) {
+                    ui.rect(id + ".fill")
+                        .x(bx).y(barTop + barH - fillH).size(barW, fillH)
+                        .color(g_theme.selected)
+                        .radius(barW * 0.45f)
+                        .transition(Motion())
+                        .instantStates()
+                        .build();
+                }
+                ui.text(id + ".label")
+                    .x(bx - Px(8.0f)).y(barTop + barH + Px(2.0f)).size(barW + Px(16.0f), labelH)
+                    .text(Utf8(label))
+                    .fontSize(std::max(Px(8.0f), barW * 0.9f))
+                    .lineHeight(labelH)
+                    .color(g_theme.textMut)
+                    .horizontalAlign(core::HorizontalAlign::Center)
+                    .build();
+                // 悬停扳机柱：显示累计行程（与列表/单位开关同一口径）
+                tipText(id + ".travel", travelText(analogVk),
+                        bx + barW * 0.5f, barTop + barH);
+            };
+            triggerBar("pad.lt", L"LT", analogOk ? analog.lt : 0.0f, pad, kPadTrigL);
+            triggerBar("pad.rt", L"RT", analogOk ? analog.rt : 0.0f, w - pad - barW, kPadTrigR);
+        })
+        .build();
+}
+
 // 外盒与按键计数区之间的边界：按住拖动无极调节（松手存档）
 void SplitDivider(core::dsl::Ui& ui, float x, float y, float h, float contentX, float contentW) {
     const float w = Px(10.0f);
@@ -224,7 +487,7 @@ void DrawKeycap(core::dsl::Ui& ui, int idx, float x, float y, float w, float h,
                 long count, double t, float boundsW, float boundsH) {
     const auto tk = CurrentTheme();
     const std::string id = "key." + std::to_string(idx);
-    const uint8_t vk = kKeys[idx].vk;
+    const KeyCode vk = kKeys[idx].vk;
     core::Color fill = HeatColor(t);
     core::Color edge = count > 0 ? core::Color{0, 0, 0, 0} : g_theme.idleEdge;
     // 实时按下反馈：物理按下/按住时键面向主题色亮化并描边（与鼠标按键一致）
@@ -445,19 +708,25 @@ void DrawBoard(core::dsl::Ui& ui, const eui::Screen& screen) {
     const StorageInfo info = StorageDescribe();
     const long activeDays = StorageActiveDayCount();
     const long usedDays = info.firstYmd ? DayDiff(TodayLocal(), info.firstYmd) + 1 : 0;
-    const long score = td.keyboard + td.mouseClicks + (long)(td.wheel * 0.1);
+    // 活跃分数：公式与权重都在 padpref.h（唯一来源，界面说明引用的也是同一组常量）。
+    // 摇杆/扳机按模拟量行程计分——它们没有"次数"，只有走了多远。
+    const PadTravel tv = PadTravelToday();
+    const double stickTrips = PadStickTripsFromTravel(tv.stickL + tv.stickR);
+    const double triggerPresses = tv.trigL + tv.trigR;
+    const long score = PadScore(td.keyboard, td.mouseClicks, td.wheel, stickTrips, triggerPresses);
 
     struct Card { const char* label; std::string value; };
-    const Card cards[6] = {
+    const Card cards[7] = {
         {"活跃分数",  std::to_string(score)},
         {"今日键盘",  std::to_string(td.keyboard)},
         {"今日鼠标",  std::to_string(td.mouseClicks)},
+        {"今日手柄",  std::to_string(td.pad)},
         {"滚轮格数",  std::to_string(td.wheel)},
         {"使用天数",  std::to_string(usedDays)},
         {"活跃天数",  std::to_string(activeDays)},
     };
 
-    const int n = 6;
+    const int n = 7;
     const float pad = Px(14.0f);
     const float gapC = Px(10.0f);
     const float cw = (w - pad * 2.0f - gapC * (n - 1)) / n;
@@ -500,7 +769,7 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         .border(1.0f, g_theme.border)
         .build();
 
-    // ── 盒内排布：键盘盒子 + 鼠标盒子 ──
+    // ── 盒内排布：键盘盒子 + 鼠标盒子 + 手柄盒子（并排；放不下时叠放）──
     const float pad = Px(14.0f);
     const float innerW = std::max(Px(60.0f), boxW - pad * 2.0f);
     const float innerH = std::max(Px(60.0f), boxH - pad * 2.0f);
@@ -509,71 +778,100 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
     const float kbMaxW = 24.0f * Px(72.0f);
     const float mouseMinW = Px(56.0f);
     const float mouseMaxW = Px(200.0f);
-    const float kMouseAspect = 1.62f;             // 鼠标盒子 高/宽
+    const float padMinW = Px(96.0f);              // 手柄盒要容纳机身 + 两条扳机行程柱
+    const float padMaxW = Px(420.0f);              // 大窗口下模型要够大可读（高度上限另有限制）
+    const float kMouseAspect = 1.62f;                     // 鼠标盒子 高/宽（竖长）
+    const float kPadAspect = kPadLayoutW / kPadLayoutH;   // 手柄盒子 宽/高（横宽）
 
     // 参考尺寸：默认布局下的自然值，用户系数在此之上升降。
-    // 鼠标参考宽度按"键盘高度的一半左右"取，保证与键盘视觉比例协调（而不是随盒宽膨胀）
-    const float kbRefW0 = std::clamp(std::min(innerW - Px(140.0f), innerH * 4.0f), kbMinW, kbMaxW);
+    // 两侧小盒的参考宽度由"键盘高度的几分之一"推出，保证与键盘的视觉比例协调
+    const float kbRefW0 = std::clamp(std::min(innerW - Px(240.0f), innerH * 4.0f), kbMinW, kbMaxW);
     const float mouseRefW = std::clamp(kbRefW0 / 4.0f * 0.78f / kMouseAspect, mouseMinW, mouseMaxW);
-    const float kbRefW = std::clamp(std::min(innerW - mouseRefW - gapM, innerH * 4.0f),
-                                    kbMinW, kbMaxW);
-    const float totalW = std::max(Px(40.0f), innerW - gapM);
+    const float padRefW = std::clamp(kbRefW0 / 4.0f * 0.95f * kPadAspect, padMinW, padMaxW);
+    const float kbRefW = std::clamp(
+        std::min(innerW - mouseRefW - padRefW - gapM * 2.0f, innerH * 4.0f), kbMinW, kbMaxW);
 
     // 用户设定尺寸（各自最小/最大钳制）
     const float kbWantRaw = std::clamp(kbRefW * s_kbScale, kbMinW, kbMaxW);
     const float mouseWantRaw = std::clamp(mouseRefW * s_mouseScale, mouseMinW, mouseMaxW);
+    const float padWantRaw = std::clamp(padRefW * s_padScale, padMinW, padMaxW);
 
-    // 叠放判定带滞回：让位方到最小值仍放不下才进入；两侧按用户值都能放下（留 10% 余量）才退出。
-    // 这样在叠放状态下拖动某一方不会立刻跳回并排。
+    // 叠放判定带滞回（固定 12px 死区，避免拖动尺寸时来回跳）：
+    //   进入 = 用户值放不下（且超出死区）；退出 = 能完整放下。
+    // 这里**不能**用"留 10% 余量才退出"这种相对死区——三方的参考尺寸本身就是按
+    // "正好铺满可用宽度"算出来的（见 kbRefW），一旦窗口短暂变窄触发叠放，就再也
+    // 满足不了 10% 余量，会永久卡在叠放（本机实测：大窗口下仍显示叠放）。
     {
-        const float wantSum = kbWantRaw + gapM + mouseWantRaw;
+        const float wantSum = kbWantRaw + mouseWantRaw + padWantRaw + gapM * 2.0f;
+        const float deadZone = Px(12.0f);
         if (!s_heatStacked) {
-            const float drivenWant = (s_resizeDriver == 2) ? mouseWantRaw : kbWantRaw;
-            const float otherMin = (s_resizeDriver == 2) ? kbMinW : mouseMinW;
-            if (drivenWant + gapM + otherMin > totalW) s_heatStacked = true;
-        } else if (wantSum <= totalW * 0.9f) {
+            if (wantSum > innerW + deadZone) s_heatStacked = true;
+        } else if (wantSum <= innerW) {
             s_heatStacked = false;
         }
     }
     const bool stacked = s_heatStacked;
 
-    // 并排：被调方保持，另一方吸收剩余空间；叠放：两侧互不影响
-    float kbWant = std::min(kbWantRaw, innerH * 4.0f);
-    float mouseWant = std::min(mouseWantRaw, innerH / kMouseAspect);
+    // 尺寸求解：三方先各取用户值（侧盒受高度换算上限约束），
+    // 并排放不下时先让键盘让位、再按比例压缩两个侧盒。
+    float kbW = std::min(kbWantRaw, innerH * 4.0f);
+    float mouseW = std::min(mouseWantRaw, innerH / kMouseAspect);
+    float padW = std::min(padWantRaw, innerH * kPadAspect);
 
-    float kbW = 0.0f, mouseW = 0.0f;
     if (stacked) {
         kbW = std::min(kbWantRaw, innerW);
         mouseW = std::min(mouseWantRaw, innerW);
-    } else if (s_resizeDriver == 2) {             // 刚调鼠标：鼠标保持，键盘吸收剩余
-        mouseW = mouseWant;
-        kbW = std::min(totalW - mouseW, kbMaxW);
-        if (kbW < kbMinW) kbW = kbMinW;
-    } else {                                      // 键盘主导（含初始）
-        kbW = kbWant;
-        // 鼠标吸收剩余空间，但不超过"键盘高度 × 0.95"的视觉比例（避免鼠标比键盘还高）
-        const float mouseCap = std::max(mouseMinW, kbW * 0.95f / (4.0f * kMouseAspect));
-        mouseW = std::min({totalW - kbW, mouseMaxW, mouseCap});
-        if (mouseW < mouseMinW) mouseW = mouseMinW;
+        padW = std::min(padWantRaw, innerW);
+        const float rowNeed = mouseW + padW + gapM;      // 第二行是鼠标 + 手柄并排
+        if (rowNeed > innerW) {
+            const float keep = std::max(0.0f, (innerW - gapM) / (mouseW + padW));
+            mouseW = std::max(mouseMinW, mouseW * keep);
+            padW = std::max(padMinW, padW * keep);
+        }
+    } else {
+        // 侧盒视觉上限：盒子高度不超过键盘高度的 0.95 倍（避免侧盒比键盘还高）
+        const float kbHeight = kbW / 4.0f;
+        mouseW = std::clamp(mouseW, mouseMinW, std::min(mouseMaxW, kbHeight * 0.95f * kMouseAspect));
+        // 手柄盒是横向的（宽:高 = 1.5:1），比键盘盒高一些才放得下完整机身，故上限放宽到 1.45 倍
+        padW   = std::clamp(padW, padMinW, std::min(padMaxW, kbHeight * 1.45f * kPadAspect));
+        float need = kbW + mouseW + padW + gapM * 2.0f;
+        if (need > innerW) {                             // ① 键盘让位（不低于最小宽度）
+            const float take = std::min(kbW - kbMinW, need - innerW);
+            kbW -= take;
+            need -= take;
+        }
+        if (need > innerW) {                             // ② 侧盒按比例压缩（不低于各自最小值）
+            const float sideSum = mouseW + padW;
+            const float keep = sideSum > 0.0f
+                             ? std::max(0.0f, 1.0f - (need - innerW) / sideSum) : 1.0f;
+            mouseW = std::max(mouseMinW, mouseW * keep);
+            padW = std::max(padMinW, padW * keep);
+        }
     }
 
-    float mouseH = mouseW * kMouseAspect;
-    if (stacked) {                                // 叠放：保留用户尺寸，超出盒高交给滚动条
-        mouseH = mouseW * kMouseAspect;
-    }
+    // 键盘高度由宽度决定（保持 24×6 的键位比例），再回算宽度使按键整除
     const float u = std::max(Px(6.0f), kbW / 24.0f);
     const float kbH = 6.0f * u;
     kbW = 24.0f * u;
-    const float contentH = stacked ? (kbH + gapM + mouseH) : std::max(kbH, mouseH);
+    const float mouseH = mouseW * kMouseAspect;
+    const float padH = padW / kPadAspect;
+
+    const float sideRowW = mouseW + padW + gapM;      // 鼠标 + 手柄 一行（叠放时的第二行）
+    const float sideRowH = std::max(mouseH, padH);
+    const float contentH = stacked ? (kbH + gapM + sideRowH) : std::max({kbH, mouseH, padH});
     const bool needScroll = contentH > innerH;
     const float drawH = needScroll ? contentH : innerH;
 
-    // 位置：组居中；并排=键盘左鼠标右，叠放=键盘上鼠标下
-    const float groupW = stacked ? std::max(kbW, mouseW) : (kbW + gapM + mouseW);
+    // 位置：组居中；并排=键盘左、鼠标中、手柄右；叠放=键盘在上、鼠标+手柄并排在下
+    const float groupW = stacked ? std::max(kbW, sideRowW) : (kbW + gapM + sideRowW);
     const float gx = std::max(0.0f, (innerW - groupW) * 0.5f);
     const float kbX = stacked ? (gx + (groupW - kbW) * 0.5f) : gx;
-    const float mouseX = stacked ? (gx + (groupW - mouseW) * 0.5f) : (gx + kbW + gapM);
-    const float mouseY = stacked ? (kbH + gapM) : std::max(0.0f, (kbH - mouseH) * 0.5f);
+    const float mouseX = stacked ? (gx + (groupW - sideRowW) * 0.5f) : (kbX + kbW + gapM);
+    const float padX = mouseX + mouseW + gapM;
+    const float mouseY = stacked ? (kbH + gapM + (sideRowH - mouseH) * 0.5f)
+                                 : std::max(0.0f, (kbH - mouseH) * 0.5f);
+    const float padY = stacked ? (kbH + gapM + (sideRowH - padH) * 0.5f)
+                               : std::max(0.0f, (kbH - padH) * 0.5f);
 
     auto drawContent = [&](core::dsl::Ui& c) {
         const float gap = 2.0f;
@@ -589,25 +887,29 @@ void DrawHeatPage(core::dsl::Ui& ui, const eui::Screen& screen) {
         const int n = (int)(sizeof(kKeys) / sizeof(kKeys[0]));
         for (int i = 0; i < n; ++i) {
             const KeyDef& k = kKeys[i];
-            long cnt = (k.vk < 256) ? g_stats.counts[k.vk] : 0;
-            // 归一化随筛选模式（见 app::HeatNorm）：三组可各自独立求峰值
+            long cnt = (k.vk < kKeySlots) ? g_stats.counts[k.vk] : 0;
+            // 归一化随筛选模式（见 app::HeatNorm）：四组可各自独立求峰值
             double t = HeatNorm(k.vk, cnt);
             if (cnt > 0 && t < 0.08) t = 0.08;
             DrawKeycap(c, i, kbX + k.x * u + gap, k.y * u + gap,
                        k.w * u - gap * 2.0f, k.h * u - gap * 2.0f, cnt, t, innerW, drawH);
         }
-        // 键盘盒子尺寸指示器（右下角外侧；钳制在内容范围内，避免被裁剪）
+        // 三个盒子各自的尺寸指示器（右下角外侧；钳制在内容范围内，避免被裁剪）
         const float hs = Px(17.0f);
         ResizeHandle(c, "kb.handle",
                      std::min(kbX + kbW + kbp + Px(5.0f), innerW - hs),
                      std::min(kbH + kbp + Px(5.0f), drawH - hs),
-                     &s_kbScale, 0.6f, 1.6f, "kb", 1);
-        // 鼠标盒子（大盒子内的子盒）
+                     &s_kbScale, 0.6f, 1.6f, "kb");
         DrawMousePanel(c, mouseX, mouseY, mouseW, mouseH);
         ResizeHandle(c, "mouse.handle",
                      std::min(mouseX + mouseW + Px(5.0f), innerW - hs),
                      std::min(mouseY + mouseH + Px(5.0f), drawH - hs),
-                     &s_mouseScale, 0.6f, 1.8f, "mouse", 2);
+                     &s_mouseScale, 0.6f, 1.8f, "mouse");
+        DrawPadPanel(c, padX, padY, padW, padH);
+        ResizeHandle(c, "pad.handle",
+                     std::min(padX + padW + Px(5.0f), innerW - hs),
+                     std::min(padY + padH + Px(5.0f), drawH - hs),
+                     &s_padScale, 0.6f, 1.8f, "pad");
     };
 
     if (needScroll) {
@@ -698,14 +1000,14 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
     // 按键筛选：与热力图着色、直方图页共用同一个全局值（切换即时生效）
     const float filtY = y + Px(48.0f);
     const float filtW = std::max(Px(120.0f), w - Px(24.0f));
-    const bool showFilter = filtW >= Px(190.0f);   // 面板过窄时隐藏，保持"全部"
+    const bool showFilter = filtW >= Px(232.0f);   // 面板过窄时隐藏（5 档需要更宽），保持"全部"
     if (showFilter) {
         ui.stack("list.filter")
             .x(x + Px(12.0f)).y(filtY).size(filtW, Px(32.0f))
             .content([&] {
                 components::segmented(ui, "seg.listfilter")
                     .size(filtW, Px(32.0f))
-                    .items({"键盘", "鼠标", "全部", "分开"})
+                    .items({"键盘", "鼠标", "手柄", "全部", "分开"})
                     .selected(g_keyFilter)
                     .theme(CurrentTheme())
                     .transition(Motion())
@@ -731,35 +1033,45 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
         .theme(CurrentTheme())
         .transition(Motion())
         .content([&](core::dsl::Ui& cui, float contentW, float) {
-            // 依筛选构建行：0=键盘 1=鼠标 2=全部 3=分开（键盘区在上、鼠标区在下）
+            // 依筛选构建行：0=键盘 1=鼠标（含滚轮）2=手柄 3=全部 4=分开（分组分段，段内降序）
             struct Row { const TopEntry* e; std::string header; };
             std::vector<Row> rows;
-            auto pushDesc = [&](bool mouseGroup) {
+            auto pushDesc = [&](KeyGroup g) {
                 for (int k = (int)g_keyHist.size() - 1; k >= 0; --k) {
                     const TopEntry& e = g_keyHist[(size_t)k];
-                    if (e.count <= 0 || e.isMouse != mouseGroup) continue;
+                    if (e.count <= 0 || e.group != g) continue;
                     rows.push_back({&e, std::string()});
                 }
             };
-            if (g_keyFilter == 3) {
-                rows.push_back({nullptr, "键盘"});
-                pushDesc(false);
-                rows.push_back({nullptr, "鼠标"});
-                pushDesc(true);
-            } else if (g_keyFilter == 2) {
+            auto pushAll = [&] {
                 for (int k = (int)g_keyHist.size() - 1; k >= 0; --k) {
                     const TopEntry& e = g_keyHist[(size_t)k];
                     if (e.count <= 0) continue;
                     rows.push_back({&e, std::string()});
                 }
-            } else {
-                pushDesc(g_keyFilter == 1);
+            };
+            switch (g_keyFilter) {
+                case 4:   // 分开：四个分组各一段，段内各自降序（与热力分组一一对应）
+                    rows.push_back({nullptr, "键盘"});  pushDesc(KeyGroup::Keyboard);
+                    rows.push_back({nullptr, "鼠标"});  pushDesc(KeyGroup::MouseButton);
+                    rows.push_back({nullptr, "滚轮"});  pushDesc(KeyGroup::Wheel);
+                    rows.push_back({nullptr, "手柄"});  pushDesc(KeyGroup::Gamepad);
+                    break;
+                case 3:   pushAll(); break;
+                case 1:   pushDesc(KeyGroup::MouseButton);
+                          pushDesc(KeyGroup::Wheel); break;
+                case 2:   pushDesc(KeyGroup::Gamepad); break;
+                default:  pushDesc(KeyGroup::Keyboard); break;
             }
 
             if (rows.empty()) {
+                const char* hint = (g_keyFilter == 2) ? "暂无手柄记录（未连接手柄，或该时段没用过）"
+                                 : (g_keyFilter == 0) ? "暂无键盘记录"
+                                 : (g_keyFilter == 1) ? "暂无鼠标记录"
+                                 :                      "暂无数据，去打几个字吧";
                 cui.text("list.empty")
                     .size(contentW, Px(24.0f))
-                    .text("暂无数据，去打几个字吧")
+                    .text(hint)
                     .fontSize(Px(14.0f)).lineHeight(Px(20.0f))
                     .color(g_theme.textMut)
                     .build();
@@ -792,7 +1104,8 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
                             .build();
                         cui.text(id + ".count")
                             .x(contentW * 0.62f).y(0.0f).size(contentW * 0.38f, rowH)
-                            .text(WithCommas(e.count))
+                            // 摇杆/扳机的后缀跟"行程显示单位"走，键鼠固定"次"
+                            .text(WithCommas(e.count) + " " + Utf8(PadUnitSuffixForCount(e.analog)))
                             .fontSize(Px(16.0f)).lineHeight(rowH)
                             .color(g_theme.textMut)
                             .horizontalAlign(core::HorizontalAlign::Right)
@@ -805,8 +1118,8 @@ void DrawKeyList(core::dsl::Ui& ui, const eui::Screen& screen) {
                             .build();
                         cui.rect(id + ".bar")
                             .x(0.0f).y(rowH - Px(4.0f))
-                            // 条宽与热力图同一套归一化：分开模式下两段各自满格，
-                            // 键盘/鼠标/全部模式也随筛选即时变化
+                            // 条宽与热力图同一套归一化：分开模式下四段各自满格，
+                            // 其余模式也随筛选即时变化
                             .size(contentW * (float)HeatNorm(e.vk, e.count), 2.0f)
                             .color(g_theme.selected)
                             .radius(1.0f)
